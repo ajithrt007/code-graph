@@ -7,8 +7,9 @@
 //!
 //! 1. A managed helper assembly (`managed/RoslynBridge`) does the Roslyn
 //!    work and prints a JSON graph document to stdout.
-//! 2. [`Bridge`] spawns `dotnet RoslynBridge.dll <path>` on demand and
-//!    reads the JSON back.
+//! 2. [`Bridge`] picks the self-contained bundle for the current OS/arch and
+//!    spawns its native executable directly, reading the JSON back. No
+//!    `dotnet` runtime/SDK is needed at runtime.
 //! 3. The `dto` module converts that wire format into the crate's
 //!    [`domain`] value types, which the desktop analyzer consumes.
 //!

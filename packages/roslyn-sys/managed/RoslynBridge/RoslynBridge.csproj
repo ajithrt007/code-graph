@@ -6,15 +6,16 @@
     <RootNamespace>CodeGraph.RoslynBridge</RootNamespace>
     <AssemblyName>RoslynBridge</AssemblyName>
     <!--
-      Runs as `dotnet RoslynBridge.dll <path>`; the Rust side captures the
-      JSON graph document it prints to stdout. No apphost is generated.
+      The Rust side spawns the published apphost executable and captures the
+      JSON graph document it prints to stdout. `dotnet publish` with
+      self-contained mode (see scripts/build-roslyn-bridge.sh) bundles the
+      .NET runtime, so the helper runs on machines with no .NET SDK/runtime
+      installed.
     -->
     <OutputType>Exe</OutputType>
-    <UseAppHost>false</UseAppHost>
-    <!-- Run on newer Microsoft.NETCore.App majors (e.g. a .NET 10 SDK
-         without the 8.0 runtime installed) instead of failing to launch. -->
-    <RollForward>LatestMajor</RollForward>
+    <UseAppHost>true</UseAppHost>
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <RuntimeIdentifiers>osx-arm64;osx-x64;linux-x64;linux-arm64;win-x64;win-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>

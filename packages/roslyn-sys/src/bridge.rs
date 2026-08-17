@@ -5,14 +5,12 @@
 //! keep all Roslyn types inside it; this crate only marshals UTF-8 JSON
 //! strings across the process boundary.
 //!
-//! Strategy: spawn `dotnet <RoslynBridge.dll> <path>` for each analysis and
-//! read the JSON from stdout. This avoids in-process CLR hosting and stays
-//! portable across macOS / Linux / Windows — the only prerequisite is the
-//! .NET 8 SDK, which the solution loader already requires.
-//!
-//! On machines without `dotnet` (or where the helper has never been built),
-//! [`Bridge::init`] reports a clear error and tests can substitute a
-//! hand-written fixture via [`Bridge::from_json`].
+//! Strategy: each supported platform ships a **self-contained** bundle of the
+//! helper (produced by `scripts/build-roslyn-bridge.sh`), which embeds the
+//! .NET runtime. [`Bridge::init`] picks the bundle for the current OS/arch
+//! and spawns its native apphost executable directly — no `dotnet` on PATH
+//! required at runtime. Tests substitute a hand-written fixture via
+//! [`Bridge::from_json`].
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,53 +19,49 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::dto::AnalysisGraph;
 
-/// Owns the resolved path to the managed helper assembly.
+/// Owns the resolved path to the managed helper's native executable.
 #[derive(Debug, Clone)]
 pub struct Bridge {
-    /// Absolute path to `RoslynBridge.dll`.
+    /// Absolute path to the self-contained helper executable.
     helper: PathBuf,
 }
 
 impl Bridge {
-    /// Resolve a usable helper assembly and make sure `dotnet` is on PATH.
+    /// Resolve the helper bundle for the current OS/arch.
     ///
     /// Uses (in order):
-    ///   1. `CODEGRAPH_ROSLYN_BRIDGE` — explicit path to `RoslynBridge.dll`
-    ///   2. An already-built helper next to this crate:
-    ///      `<repo>/managed/RoslynBridge/bin/{Release,Debug}/net8.0/`
-    ///   3. A one-off `dotnet build -c Release` of the helper project so the
-    ///      vertical slice works on a machine with the .NET SDK installed.
+    ///   1. `CODEGRAPH_ROSLYN_BRIDGE` — explicit path to the helper executable
+    ///   2. A prebuilt self-contained bundle next to this crate:
+    ///      `<repo>/managed/RoslynBridge/bin/Release/net10.0/<rid>/publish/`
+    ///      where `<rid>` matches the current OS/arch.
     pub fn init() -> Result<Self> {
-        ensure_dotnet().context(
-            "`dotnet` was not found on PATH; CodeGraph requires the .NET 8 SDK to analyze C#",
-        )?;
         let helper = locate_helper().context(
-            "could not locate a built RoslynBridge.dll; try building it with \
-             `dotnet build packages/roslyn-sys/managed/RoslynBridge/RoslynBridge.csproj -c Release`",
+            "could not locate a RoslynBridge bundle for this platform; build one once with \
+             `./scripts/build-roslyn-bridge.sh` (requires the .NET SDK), or point \
+             CODEGRAPH_ROSLYN_BRIDGE at a prebuilt RoslynBridge executable",
         )?;
         Ok(Self { helper })
     }
 
     /// Build a bridge that directly parses an already-produced JSON document.
-    /// Used by tests and offline tooling; no `dotnet` required.
+    /// Used by tests and offline tooling; no bundle required.
     pub fn from_json(_json: &str) -> Result<Self> {
         let helper = PathBuf::from("<test-fixture>");
         Ok(Self { helper })
     }
 
-    /// Path to the managed helper assembly, for diagnostics.
-    pub fn managed_assembly(&self) -> &Path {
+    /// Path to the helper executable, for diagnostics.
+    pub fn helper_path(&self) -> &Path {
         &self.helper
     }
 
     /// Analyze the project/solution at `path` and return the JSON graph
     /// document emitted by the managed helper.
     pub fn analyze_to_json(&self, path: &Path) -> Result<String> {
-        let output = Command::new("dotnet")
-            .arg(&self.helper)
+        let output = Command::new(&self.helper)
             .arg(path.as_os_str())
             .output()
-            .with_context(|| format!("failed to spawn `dotnet {}`", self.helper.display()))?;
+            .with_context(|| format!("failed to spawn `{}`", self.helper.display()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -98,19 +92,7 @@ impl Bridge {
     }
 }
 
-fn ensure_dotnet() -> Result<()> {
-    let output = Command::new("dotnet")
-        .arg("--version")
-        .output()
-        .context("failed to run `dotnet --version`")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("`dotnet --version` failed: {}", stderr.trim()));
-    }
-    Ok(())
-}
-
-/// Absolute path to a built `RoslynBridge.dll`, or `None`.
+/// Absolute path to a self-contained RoslynBridge executable, or an error.
 fn locate_helper() -> Result<PathBuf> {
     if let Ok(custom) = std::env::var("CODEGRAPH_ROSLYN_BRIDGE") {
         let p = PathBuf::from(custom);
@@ -123,50 +105,63 @@ fn locate_helper() -> Result<PathBuf> {
         ));
     }
 
-    // The helper project lives next to this crate. `CARGO_MANIFEST_DIR` is
-    // baked in at compile time, which keeps the default resolution
-    // deterministic on any machine that has the repo checked out.
-    let project_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("managed").join("RoslynBridge");
-    for config in ["Release", "Debug"] {
-        let candidate = project_dir
-            .join("bin")
-            .join(config)
-            .join("net8.0")
-            .join("RoslynBridge.dll");
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    let rid = current_rid();
+    let executable = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("managed")
+        .join("RoslynBridge")
+        .join("bin")
+        .join("Release")
+        .join("net10.0")
+        .join(rid)
+        .join("publish")
+        .join(format!("RoslynBridge{}", std::env::consts::EXE_SUFFIX));
+    if executable.is_file() {
+        return Ok(executable);
     }
 
-    // Never built in-tree — compile it now with the SDK that's installed.
-    build_helper(&project_dir)?;
-
-    let release = project_dir.join("bin").join("Release").join("net8.0").join("RoslynBridge.dll");
-    if release.is_file() {
-        return Ok(release);
-    }
     Err(anyhow!(
-        "RoslynBridge build finished but {} was not produced",
-        release.display()
+        "no RoslynBridge bundle for {} at {}",
+        rid,
+        executable.display()
     ))
 }
 
-fn build_helper(project_dir: &Path) -> Result<()> {
-    let csproj = project_dir.join("RoslynBridge.csproj");
-    if !csproj.is_file() {
-        return Err(anyhow!("helper project not found at {}", csproj.display()));
+/// Runtime identifier of the current OS/arch. Matches the bundle directories
+/// produced by `scripts/build-roslyn-bridge.sh`.
+fn current_rid() -> &'static str {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "osx-arm64"
     }
-    let output = Command::new("dotnet")
-        .arg("build")
-        .arg(&csproj)
-        .arg("-c")
-        .arg("Release")
-        .arg("--nologo")
-        .output()
-        .with_context(|| format!("failed to run `dotnet build {}`", csproj.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("`dotnet build` failed:\n{}", stderr));
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "osx-x64"
     }
-    Ok(())
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        "win-x64"
+    }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        "win-arm64"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        "linux-x64"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        "linux-arm64"
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+    )))]
+    {
+        compile_error!("unsupported platform: no RoslynBridge bundle RID for this OS/arch");
+    }
 }

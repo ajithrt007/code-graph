@@ -22,5 +22,10 @@
 **/*.exe
 **/*.dll
 
+# .NET build outputs (bin/obj/publish) — regenerable via
+# scripts/build-roslyn-bridge.sh
+**/bin/
+**/obj/
+
 # Logs
 *.log
