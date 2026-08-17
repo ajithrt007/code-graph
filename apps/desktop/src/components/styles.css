@@ -1,0 +1,225 @@
+:root {
+  --bg: #0e1117;
+  --bg-panel: #161b22;
+  --bg-panel-2: #1c2128;
+  --fg: #e6edf3;
+  --fg-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-caller: #f0883e;
+  --accent-callee: #3fb950;
+  --border: #30363d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100%;
+}
+
+.app__main {
+  position: relative;
+  height: 100%;
+}
+
+.app__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--fg-muted);
+}
+
+.sidebar {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.sidebar__header h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+
+.sidebar__subtitle {
+  color: var(--fg-muted);
+  font-size: 12px;
+  margin: 0 0 16px;
+}
+
+.sidebar__form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.sidebar__label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.sidebar__input {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.sidebar__button {
+  background: var(--accent);
+  color: #0e1117;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sidebar__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sidebar__error {
+  background: #5a1d1d;
+  border: 1px solid #f85149;
+  color: #ffdcd7;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.sidebar__section h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 16px 0 6px;
+}
+
+.sidebar__section h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 12px 0 4px;
+}
+
+.sidebar__path {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-muted);
+  word-break: break-all;
+}
+
+.sidebar__selected-name {
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.sidebar__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar__list-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 6px;
+  margin-bottom: 2px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sidebar__list-item:hover {
+  background: var(--bg-panel-2);
+}
+
+.sidebar__empty {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 4px 0;
+}
+
+.graph-view {
+  width: 100%;
+  height: 100%;
+}
+
+.method-node {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  min-width: 160px;
+  opacity: 0.45;
+  transition: opacity 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.method-node__type {
+  color: var(--fg-muted);
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
+.method-node__name {
+  font-weight: 600;
+}
+
+.method-node__handle {
+  width: 6px !important;
+  height: 6px !important;
+  background: var(--fg-muted);
+  border: none;
+}
+
+.method-node--selected {
+  opacity: 1;
+  border-color: var(--accent);
+  transform: scale(1.05);
+}
+
+.method-node--caller {
+  opacity: 1;
+  border-color: var(--accent-caller);
+}
+
+.method-node--callee {
+  opacity: 1;
+  border-color: var(--accent-callee);
+}
+
+/* Edge styling — the adapter sets `edge.style` per role, which React Flow
+   applies to the path. These are only fallbacks for unstyled edges. */
+.react-flow__edge .react-flow__edge-path {
+  stroke: var(--border);
+  stroke-width: 1.5;
+  opacity: 0.4;
+}
+
+.react-flow__edge .react-flow__edge-text {
+  fill: var(--fg-muted);
+  font-size: 10px;
+}
