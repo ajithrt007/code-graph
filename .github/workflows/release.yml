@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: macos-14
+            rid: osx-arm64
+          - target: macos-x64
+            runner: macos-15-intel
+            rid: osx-x64
+          - target: linux-x64
+            runner: ubuntu-22.04
+            rid: linux-x64
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+            rid: linux-arm64
+          - target: windows-x64
+            runner: windows-2022
+            rid: win-x64
+          - target: windows-arm64
+            runner: windows-11-arm
+            rid: win-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ matrix.rid }}-${{ hashFiles('packages/roslyn-sys/managed/RoslynBridge/RoslynBridge.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-${{ matrix.rid }}-
+            nuget-${{ runner.os }}-
+      - name: Build RoslynBridge bundle
+        shell: bash
+        run: ./scripts/build-roslyn-bridge.sh ${{ matrix.rid }}
+      - name: Archive RoslynBridge bundle
+        shell: bash
+        run: |
+          tar -C packages/roslyn-sys/managed/RoslynBridge/bin/Release/net10.0 \
+              -czf "RoslynBridge-${{ matrix.rid }}.tar.gz" "${{ matrix.rid }}"
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/desktop
+      - name: Build Tauri application
+        run: npm run tauri:build
+        working-directory: apps/desktop
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegraph-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/
+            RoslynBridge-${{ matrix.rid }}.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Stage release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          for dir in artifacts/*/; do
+            name="$(basename "$dir")"
+            find "$dir" \( -name '*.app' -prune \) -o -type f -print0 \
+              | while IFS= read -r -d '' f; do
+                  cp "$f" "assets/${name}-$(basename "$f")"
+                done
+          done
+          ls -la assets
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(assets/*)
+          [[ ${#files[@]} -eq 0 ]] && { echo "no assets to attach" >&2; exit 1; }
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes
