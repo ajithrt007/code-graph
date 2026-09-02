@@ -29,3 +29,7 @@
 
 # Logs
 *.log
+
+# Tauri build artifacts
+artifacts/
+assets/
