@@ -38,19 +38,135 @@ const EDGE_STYLE: Record<NodeRole, CSSProperties> = {
   callee: { stroke: "var(--accent-callee)", strokeWidth: 2, opacity: 1 },
 };
 
+// Layout constants
+const CLASS_H_SPACING = 350;
+const METHOD_V_SPACING = 90;
+const CLASS_TOP_MARGIN = 50;
+
+interface ClassNode {
+  id: string;
+  displayName: string;
+  methods: MethodNode[];
+  x: number;
+  y: number;
+}
+
+function extractShortClassName(fullyQualifiedName: string): string {
+  const parts = fullyQualifiedName.split(".");
+  return parts[parts.length - 1] || fullyQualifiedName;
+}
+
+function groupByClass(graph: MethodGraph): Map<string, ClassNode> {
+  const classes = new Map<string, ClassNode>();
+  for (const method of Object.values(graph.methods)) {
+    const classId = method.containing_type;
+    if (!classes.has(classId)) {
+      classes.set(classId, {
+        id: classId,
+        displayName: extractShortClassName(classId),
+        methods: [],
+        x: 0,
+        y: 0,
+      });
+    }
+    classes.get(classId)!.methods.push(method);
+  }
+  for (const cls of classes.values()) {
+    cls.methods.sort((a, b) => a.location.start_line - b.location.start_line);
+  }
+  return classes;
+}
+
+function buildClassDependencyGraph(
+  classes: Map<string, ClassNode>,
+  graph: MethodGraph
+): { nodes: Map<string, ClassNode>; edges: Set<string> } {
+  const edges = new Set<string>();
+  for (const edge of graph.edges) {
+    const sourceMethod = graph.methods[edge.source];
+    const targetMethod = graph.methods[edge.target];
+    if (!sourceMethod || !targetMethod) continue;
+
+    const sourceClass = sourceMethod.containing_type;
+    const targetClass = targetMethod.containing_type;
+    if (sourceClass !== targetClass) {
+      edges.add(`${sourceClass}->${targetClass}`);
+    }
+  }
+  return { nodes: classes, edges };
+}
+
+function topologicalSort(
+  depGraph: { nodes: Map<string, ClassNode>; edges: Set<string> }
+): ClassNode[] {
+  const { nodes, edges } = depGraph;
+  const inDegree = new Map<string, number>();
+  const adjList = new Map<string, string[]>();
+
+  for (const [id] of nodes) {
+    inDegree.set(id, 0);
+    adjList.set(id, []);
+  }
+  for (const edge of edges) {
+    const [src, tgt] = edge.split("->");
+    if (!adjList.has(src) || !adjList.has(tgt)) continue;
+    adjList.get(src)!.push(tgt);
+    inDegree.set(tgt, (inDegree.get(tgt) ?? 0) + 1);
+  }
+
+  const queue = [...nodes.keys()].filter((id) => inDegree.get(id) === 0);
+  const result: ClassNode[] = [];
+
+  while (queue.length) {
+    const id = queue.shift()!;
+    result.push(nodes.get(id)!);
+    for (const neighbor of adjList.get(id)!) {
+      const deg = inDegree.get(neighbor)! - 1;
+      inDegree.set(neighbor, deg);
+      if (deg === 0) queue.push(neighbor);
+    }
+  }
+
+  for (const [id] of nodes) {
+    const cls = nodes.get(id)!;
+    if (!result.includes(cls)) result.push(cls);
+  }
+  return result;
+}
+
+function assignPositions(sortedClasses: ClassNode[]): void {
+  sortedClasses.forEach((cls, classIndex) => {
+    cls.x = classIndex * CLASS_H_SPACING;
+    cls.y = CLASS_TOP_MARGIN;
+    cls.methods.forEach((method, methodIndex) => {
+      (method as MethodNode & { _layout?: { x: number; y: number } })._layout = {
+        x: cls.x,
+        y: cls.y + methodIndex * METHOD_V_SPACING,
+      };
+    });
+  });
+}
+
 /**
- * Build React Flow nodes from the domain graph. Pure: no React Flow state.
+ * Build React Flow nodes from the domain graph using hierarchical layout:
+ * - Classes ordered left-to-right by call dependency (callers left, callees right)
+ * - Methods within a class stacked vertically in source order
  */
 export function toReactFlowNodes(graph: MethodGraph): RFMethodNode[] {
-  return Object.values(graph.methods).map((method, index) => ({
-    id: method.id,
-    type: "method",
-    // Lay nodes out on a wide grid. Real layouts (dagre / elk) can be
-    // slotted in here without touching callers — that's the point of the
-    // adapter.
-    position: { x: (index % 6) * 240, y: Math.floor(index / 6) * 140 },
-    data: { method, role: "default" },
-  }));
+  const classes = groupByClass(graph);
+  const depGraph = buildClassDependencyGraph(classes, graph);
+  const sortedClasses = topologicalSort(depGraph);
+  assignPositions(sortedClasses);
+
+  return Object.values(graph.methods).map((method) => {
+    const layout = (method as MethodNode & { _layout?: { x: number; y: number } })._layout;
+    return {
+      id: method.id,
+      type: "method",
+      position: layout ?? { x: 0, y: 0 },
+      data: { method, role: "default" },
+    };
+  });
 }
 
 export function toReactFlowEdges(graph: MethodGraph): RFCallEdge[] {
