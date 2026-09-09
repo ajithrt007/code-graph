@@ -30,17 +30,23 @@ interface GraphViewProps {
 }
 
 export function GraphView({ graph, selectedId, onSelect }: GraphViewProps) {
-  const baseNodes = useMemo<RFMethodNode[]>(() => toReactFlowNodes(graph), [graph]);
-  const baseEdges = useMemo<RFCallEdge[]>(() => toReactFlowEdges(graph), [graph]);
+  const baseNodes = useMemo<RFMethodNode[]>(
+    () => toReactFlowNodes(graph),
+    [graph],
+  );
+  const baseEdges = useMemo<RFCallEdge[]>(
+    () => toReactFlowEdges(graph),
+    [graph],
+  );
 
   const { nodes, edges } = useMemo(
     () => applySelection(baseNodes, baseEdges, selectedId, graph),
-    [baseNodes, baseEdges, selectedId, graph]
+    [baseNodes, baseEdges, selectedId, graph],
   );
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => onSelect(node.id),
-    [onSelect]
+    [onSelect],
   );
   const handlePaneClick = useCallback(() => onSelect(null), [onSelect]);
 

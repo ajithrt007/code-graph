@@ -1,35 +1,35 @@
-// Top-level component. Wires the data hook to the sidebar and the graph
-// view. No business logic — just composition.
-
-import { GraphView } from "./components/GraphView";
-import { Sidebar } from "./components/Sidebar";
-import { useGraphData } from "./graph/useGraphData";
+import { ProjectsScreen } from "./components/ProjectsScreen";
+import { ProjectWorkspace } from "./components/ProjectWorkspace";
+import { TabStrip } from "./components/TabStrip";
+import { useWorkspace } from "./workspace/useWorkspace";
 
 export default function App() {
-  const { loaded, selectedId, selected, callers, callees, error, loading, analyze, select } =
-    useGraphData();
-
+  const workspace = useWorkspace();
+  const active = workspace.tabs.find((tab) => tab.id === workspace.activeTab);
   return (
     <div className="app">
-      <Sidebar
-        loadedPath={loaded?.source_path ?? null}
-        loading={loading}
-        error={error}
-        selected={selected}
-        callers={callers}
-        callees={callees}
-        onAnalyze={analyze}
-        onSelect={(id) => select(id)}
+      <TabStrip
+        tabs={workspace.tabs}
+        active={workspace.activeTab}
+        onActivate={workspace.setActiveTab}
+        onClose={workspace.closeTab}
       />
-      <main className="app__main">
-        {loaded ? (
-          <GraphView graph={loaded.graph} selectedId={selectedId} onSelect={select} />
-        ) : (
-          <div className="app__placeholder">
-            <p>Open a .NET solution or project to begin.</p>
-          </div>
-        )}
-      </main>
+      {workspace.activeTab === "projects" ? (
+        <ProjectsScreen
+          projects={workspace.projects}
+          onOpenPath={workspace.openPath}
+          onOpenRecent={workspace.openRecent}
+        />
+      ) : active ? (
+        <ProjectWorkspace
+          tab={active}
+          onSelect={(id) => workspace.select(active.id, id)}
+          onToggleEditor={() => workspace.toggleEditor(active.id)}
+          onSave={(methodId, code) =>
+            workspace.saveSource(active.id, methodId, code)
+          }
+        />
+      ) : null}
     </div>
   );
 }

@@ -27,13 +27,22 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            crate::ipc::analyze_solution,
-            crate::ipc::get_graph,
+            crate::ipc::list_projects,
+            crate::ipc::open_project,
+            crate::ipc::load_project,
+            crate::ipc::refresh_project,
+            crate::ipc::close_project,
             crate::ipc::get_method,
             crate::ipc::get_callers,
             crate::ipc::get_callees,
+            crate::ipc::get_method_source,
+            crate::ipc::save_method_source,
         ])
         .setup(|app| {
+            app.state::<AppState>()
+                .graph
+                .initialize(&app.handle())
+                .expect("initialize project database");
             // Ensure the main window exists. Tauri 2 emits a warning if
             // `tauri.conf.json` declares no windows and we don't create one
             // programmatically, so we attach a fallback here.

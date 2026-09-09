@@ -39,9 +39,21 @@ internal static class GraphBuilder
             {
                 var symbol = semanticModel.GetDeclaredSymbol(member) as IMethodSymbol;
                 if (symbol is null || !MethodRenderer.InSource(symbol)) continue;
-                var dto = MethodRenderer.ToMethodDto(symbol, filePath, symbolToId);
-                if (!emittedIds.Add(dto.Id)) continue;
-                result.Methods.Add(dto);
+                // Syntax-node Span covers the complete declaration/body. The
+                // symbol location covers only the name token for methods.
+                var dto = MethodRenderer.ToMethodDto(symbol, filePath, symbolToId, Location.Create(tree, member.Span));
+                if (emittedIds.Add(dto.Id))
+                {
+                    result.Methods.Add(dto);
+                }
+                else
+                {
+                    // A call from an earlier syntax tree may have registered
+                    // this node first with only its identifier location.
+                    // Replace it with the declaration-wide source span.
+                    var index = result.Methods.FindIndex(node => node.Id == dto.Id);
+                    if (index >= 0) result.Methods[index] = dto;
+                }
             }
 
             // Pass 2: method invocations become edges.
