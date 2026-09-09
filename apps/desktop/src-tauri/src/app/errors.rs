@@ -14,6 +14,20 @@ pub enum AppError {
     MethodNotFound(String),
     #[error("analysis failed: {0}")]
     Analysis(String),
+    #[error("persistence failed: {0}")]
+    Persistence(String),
+    #[error("project service has not initialized")]
+    NotInitialized,
+    #[error("project not found: {0}")]
+    ProjectNotFound(String),
+    #[error("project is not open: {0}")]
+    ProjectNotOpen(String),
+    #[error("project is unavailable: {0}")]
+    ProjectUnavailable(String),
+    #[error("file watcher failed: {0}")]
+    Watch(String),
+    #[error("could not read method source: {0}")]
+    Source(String),
 }
 
 impl Serialize for AppError {
@@ -27,11 +41,25 @@ impl Serialize for AppError {
             NoGraphLoaded,
             MethodNotFound(&'a str),
             Analysis(&'a str),
+            Persistence(&'a str),
+            NotInitialized,
+            ProjectNotFound(&'a str),
+            ProjectNotOpen(&'a str),
+            ProjectUnavailable(&'a str),
+            Watch(&'a str),
+            Source(&'a str),
         }
         let value = match self {
             AppError::NoGraphLoaded => Kind::NoGraphLoaded,
             AppError::MethodNotFound(id) => Kind::MethodNotFound(id),
             AppError::Analysis(msg) => Kind::Analysis(msg),
+            AppError::Persistence(msg) => Kind::Persistence(msg),
+            AppError::NotInitialized => Kind::NotInitialized,
+            AppError::ProjectNotFound(id) => Kind::ProjectNotFound(id),
+            AppError::ProjectNotOpen(id) => Kind::ProjectNotOpen(id),
+            AppError::ProjectUnavailable(path) => Kind::ProjectUnavailable(path),
+            AppError::Watch(msg) => Kind::Watch(msg),
+            AppError::Source(msg) => Kind::Source(msg),
         };
         value.serialize(serializer)
     }

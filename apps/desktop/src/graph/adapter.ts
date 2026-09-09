@@ -51,6 +51,12 @@ interface ClassNode {
   y: number;
 }
 
+export interface ClassTreeItem {
+  id: string;
+  displayName: string;
+  methods: MethodNode[];
+}
+
 function extractShortClassName(fullyQualifiedName: string): string {
   const parts = fullyQualifiedName.split(".");
   return parts[parts.length - 1] || fullyQualifiedName;
@@ -79,7 +85,7 @@ function groupByClass(graph: MethodGraph): Map<string, ClassNode> {
 
 function buildClassDependencyGraph(
   classes: Map<string, ClassNode>,
-  graph: MethodGraph
+  graph: MethodGraph,
 ): { nodes: Map<string, ClassNode>; edges: Set<string> } {
   const edges = new Set<string>();
   for (const edge of graph.edges) {
@@ -96,9 +102,10 @@ function buildClassDependencyGraph(
   return { nodes: classes, edges };
 }
 
-function topologicalSort(
-  depGraph: { nodes: Map<string, ClassNode>; edges: Set<string> }
-): ClassNode[] {
+function topologicalSort(depGraph: {
+  nodes: Map<string, ClassNode>;
+  edges: Set<string>;
+}): ClassNode[] {
   const { nodes, edges } = depGraph;
   const inDegree = new Map<string, number>();
   const adjList = new Map<string, string[]>();
@@ -139,12 +146,21 @@ function assignPositions(sortedClasses: ClassNode[]): void {
     cls.x = classIndex * CLASS_H_SPACING;
     cls.y = CLASS_TOP_MARGIN;
     cls.methods.forEach((method, methodIndex) => {
-      (method as MethodNode & { _layout?: { x: number; y: number } })._layout = {
-        x: cls.x,
-        y: cls.y + methodIndex * METHOD_V_SPACING,
-      };
+      (method as MethodNode & { _layout?: { x: number; y: number } })._layout =
+        {
+          x: cls.x,
+          y: cls.y + methodIndex * METHOD_V_SPACING,
+        };
     });
   });
+}
+
+/** Ordered class hierarchy shared by the graph layout and left explorer. */
+export function orderedClasses(graph: MethodGraph): ClassTreeItem[] {
+  const classes = groupByClass(graph);
+  return topologicalSort(buildClassDependencyGraph(classes, graph)).map(
+    ({ id, displayName, methods }) => ({ id, displayName, methods }),
+  );
 }
 
 /**
@@ -154,12 +170,15 @@ function assignPositions(sortedClasses: ClassNode[]): void {
  */
 export function toReactFlowNodes(graph: MethodGraph): RFMethodNode[] {
   const classes = groupByClass(graph);
-  const depGraph = buildClassDependencyGraph(classes, graph);
-  const sortedClasses = topologicalSort(depGraph);
+  const sortedClasses = topologicalSort(
+    buildClassDependencyGraph(classes, graph),
+  );
   assignPositions(sortedClasses);
 
   return Object.values(graph.methods).map((method) => {
-    const layout = (method as MethodNode & { _layout?: { x: number; y: number } })._layout;
+    const layout = (
+      method as MethodNode & { _layout?: { x: number; y: number } }
+    )._layout;
     return {
       id: method.id,
       type: "method",
@@ -174,7 +193,6 @@ export function toReactFlowEdges(graph: MethodGraph): RFCallEdge[] {
     id: `${edge.source}->${edge.target}`,
     source: edge.source,
     target: edge.target,
-    label: edge.kind.toUpperCase(),
     type: "smoothstep",
     animated: false,
     style: EDGE_STYLE.default,
@@ -193,13 +211,17 @@ export function applySelection(
   nodes: RFMethodNode[],
   edges: RFCallEdge[],
   selectedId: string | null,
-  graph: MethodGraph
+  graph: MethodGraph,
 ): { nodes: RFMethodNode[]; edges: RFCallEdge[] } {
   if (!selectedId) {
     return { nodes, edges };
   }
-  const callerIds = new Set(graphOps.callersOf(graph, selectedId).map((m) => m.id));
-  const calleeIds = new Set(graphOps.calleesOf(graph, selectedId).map((m) => m.id));
+  const callerIds = new Set(
+    graphOps.callersOf(graph, selectedId).map((m) => m.id),
+  );
+  const calleeIds = new Set(
+    graphOps.calleesOf(graph, selectedId).map((m) => m.id),
+  );
 
   const nextNodes = nodes.map((n) => {
     let role: NodeRole = "default";

@@ -21,6 +21,8 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+notify = "6"
 
 # Roslyn bridge. The actual implementation lives in the companion
 # `roslyn-sys` crate which wraps `Microsoft.CodeAnalysis` via a managed

@@ -15,10 +15,18 @@ const ROLE_CLASS: Record<MethodNodeData["role"], string> = {
 function MethodNodeView({ data }: NodeProps<MethodNodeData>) {
   return (
     <div className={ROLE_CLASS[data.role]}>
-      <Handle type="target" position={Position.Left} className="method-node__handle" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="method-node__handle"
+      />
       <div className="method-node__type">{data.method.containing_type}</div>
       <div className="method-node__name">{data.method.display_name}</div>
-      <Handle type="source" position={Position.Right} className="method-node__handle" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="method-node__handle"
+      />
     </div>
   );
 }

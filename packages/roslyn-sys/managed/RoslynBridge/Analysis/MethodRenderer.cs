@@ -19,7 +19,8 @@ internal static class MethodRenderer
     public static MethodNodeDto ToMethodDto(
         IMethodSymbol symbol,
         string fallbackFile,
-        Dictionary<ISymbol, string> symbolToId)
+        Dictionary<ISymbol, string> symbolToId,
+        Location? declarationLocation = null)
     {
         var location = symbol.Locations.FirstOrDefault(l => l.IsInSource);
         var id = MakeId(symbol);
@@ -35,8 +36,10 @@ internal static class MethodRenderer
             FullyQualifiedName = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
             DisplayName = BuildDisplayName(symbol),
             ContainingType = symbol.ContainingType?.ToDisplayString() ?? string.Empty,
-            FilePath = location?.SourceTree?.FilePath ?? fallbackFile,
-            Location = ToLocation(location),
+            FilePath = declarationLocation?.SourceTree?.FilePath ?? location?.SourceTree?.FilePath ?? fallbackFile,
+            // A declaration span (rather than the identifier's span) lets the
+            // desktop editor display the complete selected method.
+            Location = ToLocation(declarationLocation ?? location),
         };
     }
 

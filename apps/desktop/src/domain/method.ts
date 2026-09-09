@@ -35,8 +35,21 @@ export interface MethodGraph {
 }
 
 export interface LoadedGraph {
+  project_id: string;
   source_path: string;
   graph: MethodGraph;
+}
+
+export interface ProjectSummary {
+  id: string;
+  path: string;
+  display_name: string;
+  last_opened_at: number;
+}
+
+export interface MethodSource {
+  code: string;
+  start_line: number;
 }
 
 /**
