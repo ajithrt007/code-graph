@@ -22,6 +22,10 @@
 **/*.exe
 **/*.dll
 
+# Staged RoslynBridge bundle for the Tauri installer — regenerable via
+# scripts/collect-roslyn-bridge.sh (would otherwise commit ~100MB of binaries)
+apps/desktop/src-tauri/resources/
+
 # .NET build outputs (bin/obj/publish) — regenerable via
 # scripts/build-roslyn-bridge.sh
 **/bin/

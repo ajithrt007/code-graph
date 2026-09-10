@@ -37,10 +37,28 @@ pub struct MethodSource {
     pub start_line: u32,
 }
 
+/// One matching line inside a method's source span, for global search.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchMatch {
+    pub method: MethodNode,
+    pub line_number: u32,
+    pub line_text: String,
+}
+
+/// Caps for global search: at most this many lines per method and this
+/// many matches overall, so a common token can't flood the palette.
+const MAX_SEARCH_LINES_PER_METHOD: usize = 5;
+const MAX_SEARCH_RESULTS: usize = 100;
+
 pub struct GraphService {
     database: Mutex<Option<Connection>>,
     graphs: Mutex<HashMap<String, LoadedGraph>>,
     watchers: Mutex<HashMap<String, RecommendedWatcher>>,
+    /// Installed app's Tauri resource directory, resolved once at startup.
+    /// The RoslynBridge bundle ships inside the installer there; `None`
+    /// (e.g. resource dir unavailable) just means the bridge falls back to
+    /// the dev-tree publish directory / env override.
+    resource_dir: Mutex<Option<PathBuf>>,
 }
 
 impl Default for GraphService {
@@ -49,6 +67,7 @@ impl Default for GraphService {
             database: Mutex::new(None),
             graphs: Mutex::new(HashMap::new()),
             watchers: Mutex::new(HashMap::new()),
+            resource_dir: Mutex::new(None),
         }
     }
 }
@@ -59,6 +78,7 @@ impl GraphService {
     }
 
     pub fn initialize(&self, app: &AppHandle) -> AppResult<()> {
+        *self.resource_dir.lock().expect("resource dir poisoned") = app.path().resource_dir().ok();
         let data_dir = app
             .path()
             .app_data_dir()
@@ -206,6 +226,48 @@ impl GraphService {
         fs::write(&method.file_path, next).map_err(|e| AppError::Source(e.to_string()))
     }
 
+    /// Case-insensitive substring search over every method's source span.
+    /// Returns one item per matching line (method + whole line), ordered by
+    /// method display name then line number. Methods whose files can't be
+    /// read are skipped rather than failing the whole search.
+    pub fn search_methods(&self, project_id: &str, query: &str) -> AppResult<Vec<SearchMatch>> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let loaded = self.current(project_id)?;
+        let mut methods: Vec<&MethodNode> = loaded.graph.methods.values().collect();
+        methods.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+
+        let mut out = Vec::new();
+        for method in methods {
+            if out.len() >= MAX_SEARCH_RESULTS {
+                break;
+            }
+            let Ok(source) = fs::read_to_string(&method.file_path) else {
+                continue;
+            };
+            let lines: Vec<&str> = source.lines().collect();
+            for (line_number, line_text) in find_line_matches(
+                &lines,
+                method.location.start_line,
+                method.location.end_line,
+                &needle,
+                MAX_SEARCH_LINES_PER_METHOD,
+            ) {
+                out.push(SearchMatch {
+                    method: method.clone(),
+                    line_number,
+                    line_text,
+                });
+                if out.len() >= MAX_SEARCH_RESULTS {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn current(&self, project_id: &str) -> AppResult<LoadedGraph> {
         self.graphs
             .lock()
@@ -216,7 +278,16 @@ impl GraphService {
     }
 
     fn analyze_project(&self, project_id: &str, path: &Path) -> AppResult<LoadedGraph> {
-        let graph = CSharpAnalyzer::new()
+        let analyzer = match self
+            .resource_dir
+            .lock()
+            .expect("resource dir poisoned")
+            .clone()
+        {
+            Some(dir) => CSharpAnalyzer::with_resource_dir(dir),
+            None => CSharpAnalyzer::new(),
+        };
+        let graph = analyzer
             .analyze_path(path)
             .map_err(|e| AppError::Analysis(e.to_string()))?;
         let loaded = LoadedGraph {
@@ -344,4 +415,151 @@ fn is_relevant_change(event: &Event) -> bool {
                     Some("cs" | "csproj" | "sln" | "props" | "targets")
                 )
         })
+}
+
+/// Case-insensitive substring matches within a method's 1-based line span.
+/// Returns `(line_number, trimmed_text)` ordered by line, capped at `max`.
+/// `needle` must already be lowercased by the caller.
+fn find_line_matches(
+    all_lines: &[&str],
+    start_line: u32,
+    end_line: u32,
+    needle: &str,
+    max: usize,
+) -> Vec<(u32, String)> {
+    let start = start_line.saturating_sub(1) as usize;
+    let end = (end_line as usize).min(all_lines.len());
+    if start >= end || start >= all_lines.len() || max == 0 {
+        return Vec::new();
+    }
+    all_lines[start..end]
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.to_lowercase().contains(needle))
+        .take(max)
+        .map(|(idx, line)| ((start + idx + 1) as u32, line.trim().to_string()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_line_matches;
+    use super::{GraphService, LoadedGraph};
+    use crate::domain::{MethodGraph, MethodId, MethodNode, SourceLocation};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    const LINES: &[&str] = &[
+        "public Order? GetOrder(int id)",
+        "{",
+        "    return _repository.FindById(id);",
+        "}",
+    ];
+
+    #[test]
+    fn matches_declaration_and_body_case_insensitively() {
+        let out = find_line_matches(LINES, 1, 4, "findbyid", 10);
+        assert_eq!(
+            out,
+            vec![(3, "return _repository.FindById(id);".to_string())]
+        );
+
+        let out = find_line_matches(LINES, 1, 4, "getorder", 10);
+        assert_eq!(out, vec![(1, "public Order? GetOrder(int id)".to_string())]);
+    }
+
+    #[test]
+    fn respects_span_and_cap() {
+        // Body line excluded when the span covers only the declaration.
+        assert!(find_line_matches(LINES, 1, 1, "findbyid", 10).is_empty());
+        // Cap of 1 keeps only the first of two matches for "{"-adjacent "r".
+        let out = find_line_matches(LINES, 1, 4, "r", 1);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 1);
+    }
+
+    #[test]
+    fn rejects_degenerate_spans() {
+        assert!(find_line_matches(LINES, 3, 2, "x", 10).is_empty());
+        assert!(find_line_matches(LINES, 99, 120, "x", 10).is_empty());
+        assert!(find_line_matches(LINES, 1, 4, "getorder", 0).is_empty());
+    }
+
+    fn test_service(source_file: &std::path::Path) -> GraphService {
+        let node = |id: &str, display: &str, start: u32, end: u32| MethodNode {
+            id: MethodId::new(id),
+            name: display.to_string(),
+            fully_qualified_name: display.to_string(),
+            display_name: display.to_string(),
+            containing_type: "Svc".to_string(),
+            file_path: source_file.to_string_lossy().to_string(),
+            location: SourceLocation {
+                file_path: source_file.to_string_lossy().to_string(),
+                start_line: start,
+                start_column: 1,
+                end_line: end,
+                end_column: 1,
+            },
+        };
+        let mut methods = HashMap::new();
+        methods.insert(MethodId::new("b"), node("b", "Svc.B()", 5, 7));
+        methods.insert(MethodId::new("a"), node("a", "Svc.A()", 1, 3));
+        let service = GraphService::new();
+        service.graphs.lock().expect("graphs poisoned").insert(
+            "p".to_string(),
+            LoadedGraph {
+                project_id: "p".to_string(),
+                source_path: PathBuf::from("/tmp"),
+                graph: MethodGraph {
+                    methods,
+                    edges: vec![],
+                },
+            },
+        );
+        service
+    }
+
+    #[test]
+    fn search_methods_matches_lines_ordered_by_method() {
+        let dir = std::env::temp_dir().join(format!(
+            "codegraph-search-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let file = dir.join("Svc.cs");
+        std::fs::write(
+            &file,
+            [
+                "void A() {",
+                "  Log(\"hit\");",
+                "}",
+                "",
+                "void B() {",
+                "  Log(\"HIT\");",
+                "}",
+            ]
+            .join("\n"),
+        )
+        .expect("write temp source");
+
+        let service = test_service(&file);
+        let out = service.search_methods("p", "hit").expect("search");
+        assert_eq!(out.len(), 2);
+        // Ordered by display name: A() before B().
+        assert_eq!(out[0].method.display_name, "Svc.A()");
+        assert_eq!(out[0].line_number, 2);
+        assert_eq!(out[0].line_text, "Log(\"hit\");");
+        assert_eq!(out[1].method.display_name, "Svc.B()");
+        assert_eq!(out[1].line_number, 6);
+
+        assert!(service
+            .search_methods("p", "   ")
+            .expect("search")
+            .is_empty());
+        assert!(service.search_methods("missing", "hit").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

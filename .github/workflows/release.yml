@@ -73,11 +73,9 @@ jobs:
       - name: Build RoslynBridge bundle
         shell: bash
         run: ./scripts/build-roslyn-bridge.sh ${{ matrix.rid }}
-      - name: Archive RoslynBridge bundle
+      - name: Stage RoslynBridge bundle into Tauri resources
         shell: bash
-        run: |
-          tar -C packages/roslyn-sys/managed/RoslynBridge/bin/Release/net10.0 \
-              -czf "RoslynBridge-${{ matrix.rid }}.tar.gz" "${{ matrix.rid }}"
+        run: ./scripts/collect-roslyn-bridge.sh ${{ matrix.rid }}
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/desktop
@@ -91,7 +89,6 @@ jobs:
           if-no-files-found: error
           path: |
             apps/desktop/src-tauri/target/release/bundle/
-            RoslynBridge-${{ matrix.rid }}.tar.gz
 
   release:
     name: Publish GitHub Release

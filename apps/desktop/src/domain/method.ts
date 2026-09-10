@@ -52,6 +52,12 @@ export interface MethodSource {
   start_line: number;
 }
 
+export interface SearchMatch {
+  method: MethodNode;
+  line_number: number;
+  line_text: string;
+}
+
 /**
  * Helpers that operate purely on the domain graph. Kept here so the
  * adapter layer can stay free of business logic.

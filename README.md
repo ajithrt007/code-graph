@@ -33,6 +33,11 @@ the right one automatically.
 #    ./scripts/build-roslyn-bridge.sh win-x64
 #    ./scripts/build-roslyn-bridge.sh linux-x64
 
+# 1b. Stage the bundle into the Tauri app so it ships inside the installer
+#     (release installers need this; `tauri dev` also reads it). Or just run
+#     ./scripts/run-local.sh, which does steps 1–4 for you.
+./scripts/collect-roslyn-bridge.sh osx-arm64
+
 # 2. Rust tests (no dotnet needed — uses JSON fixtures)
 cargo test --manifest-path packages/roslyn-sys/Cargo.toml
 

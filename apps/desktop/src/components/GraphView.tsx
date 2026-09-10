@@ -2,13 +2,14 @@
 // interaction events. Knows nothing about the Tauri backend or domain
 // graph types directly — it receives everything via props.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import ReactFlow, {
   Background,
   Controls,
   type Edge,
   type Node,
   type NodeMouseHandler,
+  type ReactFlowInstance,
 } from "reactflow";
 
 import {
@@ -27,9 +28,16 @@ interface GraphViewProps {
   graph: MethodGraph;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** Center the viewport on this node. `nonce` re-triggers repeat focuses. */
+  focusRequest: { id: string; nonce: number } | null;
 }
 
-export function GraphView({ graph, selectedId, onSelect }: GraphViewProps) {
+export function GraphView({
+  graph,
+  selectedId,
+  onSelect,
+  focusRequest,
+}: GraphViewProps) {
   const baseNodes = useMemo<RFMethodNode[]>(
     () => toReactFlowNodes(graph),
     [graph],
@@ -50,6 +58,18 @@ export function GraphView({ graph, selectedId, onSelect }: GraphViewProps) {
   );
   const handlePaneClick = useCallback(() => onSelect(null), [onSelect]);
 
+  const instanceRef = useRef<ReactFlowInstance | null>(null);
+  useEffect(() => {
+    if (focusRequest) {
+      instanceRef.current?.fitView({
+        nodes: [{ id: focusRequest.id }],
+        duration: 300,
+        padding: 0.25,
+        maxZoom: 1.5,
+      });
+    }
+  }, [focusRequest]);
+
   return (
     <div className="graph-view">
       <ReactFlow
@@ -57,6 +77,9 @@ export function GraphView({ graph, selectedId, onSelect }: GraphViewProps) {
         edges={edges as Edge[]}
         nodeTypes={nodeTypes}
         fitView
+        onInit={(instance) => {
+          instanceRef.current = instance;
+        }}
         onNodeClick={handleNodeClick}
         onPaneClick={handlePaneClick}
         proOptions={{ hideAttribution: true }}

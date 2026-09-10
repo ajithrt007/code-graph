@@ -1,6 +1,6 @@
 //! Thin project-scoped Tauri command surface.
 
-use crate::app::graph_service::{LoadedGraph, MethodSource, ProjectSummary};
+use crate::app::graph_service::{LoadedGraph, MethodSource, ProjectSummary, SearchMatch};
 use crate::domain::{MethodId, MethodNode};
 use crate::AppState;
 use std::path::PathBuf;
@@ -24,6 +24,11 @@ pub struct SaveMethodSourceArgs {
     pub project_id: String,
     pub id: String,
     pub code: String,
+}
+#[derive(serde::Deserialize)]
+pub struct SearchArgs {
+    pub project_id: String,
+    pub query: String,
 }
 
 #[tauri::command]
@@ -103,4 +108,11 @@ pub fn save_method_source(
     state
         .graph
         .save_method_source(&args.project_id, &MethodId::new(args.id), &args.code)
+}
+#[tauri::command]
+pub fn search_methods(
+    args: SearchArgs,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchMatch>, crate::app::AppError> {
+    state.graph.search_methods(&args.project_id, &args.query)
 }

@@ -4,6 +4,7 @@ import type {
   MethodNode,
   MethodSource,
   ProjectSummary,
+  SearchMatch,
 } from "../domain/method";
 
 export const tauri = {
@@ -33,5 +34,9 @@ export const tauri = {
   saveMethodSource: (projectId: string, id: string, code: string) =>
     invoke<void>("save_method_source", {
       args: { project_id: projectId, id, code },
+    }),
+  searchMethods: (projectId: string, query: string) =>
+    invoke<SearchMatch[]>("search_methods", {
+      args: { project_id: projectId, query },
     }),
 };
