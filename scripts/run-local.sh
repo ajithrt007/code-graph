@@ -19,7 +19,8 @@
 # Steps:
 #   1. Detect the .NET RID for this machine (override with --rid).
 #   2. Publish the self-contained RoslynBridge bundle (needs .NET SDK once;
-#      skipped when the bundle already exists).
+#      skipped when the bundle already exists) and stage it into
+#      `apps/desktop/src-tauri/resources/` so the app embeds it.
 #   3. `cargo test` on packages/roslyn-sys (JSON fixtures, no dotnet needed).
 #   4. `npm install` in apps/desktop (skipped when node_modules exists).
 #   5. Launch `tauri dev` (or `tauri build` with --build).
@@ -107,6 +108,12 @@ if [[ ! -x "$bundle_exe" ]]; then
   echo "RoslynBridge bundle still missing at $bundle_exe" >&2
   exit 1
 fi
+
+# 1b. Stage the bundle into the Tauri app so `tauri dev`/`tauri build`
+#     embeds it via `bundle.resources` (the installed app then needs no
+#     manual RoslynBridge setup).
+echo "==> Staging RoslynBridge into Tauri resources..."
+"$repo_root/scripts/collect-roslyn-bridge.sh" "$RID"
 
 # 2. Rust tests (fixture-based, no dotnet needed).
 if [[ "$SKIP_TESTS" -eq 1 ]]; then

@@ -10,7 +10,7 @@
 //! application or domain layers — they live entirely inside
 //! `roslyn-sys`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tracing::{debug, info};
@@ -20,15 +20,29 @@ use crate::domain::MethodGraph;
 use super::solution_loader::SolutionLoader;
 
 /// Analyzes C# / .NET solutions or projects.
+///
+/// `resource_dir` is the installed app's Tauri resource directory, where the
+/// self-contained RoslynBridge bundle ships inside the installer (see
+/// `bundle.resources` in `tauri.conf.json`). When absent (dev/test), the
+/// bridge falls back to the publish directory in the source tree.
 #[derive(Debug, Default, Clone)]
 pub struct CSharpAnalyzer {
     solution_loader: SolutionLoader,
+    resource_dir: Option<PathBuf>,
 }
 
 impl CSharpAnalyzer {
     pub fn new() -> Self {
         Self {
             solution_loader: SolutionLoader::new(),
+            resource_dir: None,
+        }
+    }
+
+    pub fn with_resource_dir(dir: PathBuf) -> Self {
+        Self {
+            solution_loader: SolutionLoader::new(),
+            resource_dir: Some(dir),
         }
     }
 
@@ -40,7 +54,11 @@ impl CSharpAnalyzer {
             .with_context(|| format!("failed to discover projects at {}", path.display()))?;
 
         info!(projects = projects.len(), "discovered projects");
-        let bridge = roslyn_sys::Bridge::init().context("initializing Roslyn bridge")?;
+        let bridge = match &self.resource_dir {
+            Some(dir) => roslyn_sys::Bridge::init_with_resource_dir(dir),
+            None => roslyn_sys::Bridge::init(),
+        }
+        .context("initializing Roslyn bridge")?;
 
         let mut merged = MethodGraph::new();
         for project in projects {

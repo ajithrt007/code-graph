@@ -1,7 +1,14 @@
+import { useEffect, useState } from "react";
 import { GraphView } from "./GraphView";
 import { ClassExplorer } from "./ClassExplorer";
 import { MethodEditor } from "./MethodEditor";
+import { SearchPalette } from "./SearchPalette";
 import type { ProjectTab } from "../workspace/useWorkspace";
+
+const searchShortcutLabel =
+  typeof navigator !== "undefined" && /mac/i.test(navigator.platform)
+    ? "⌘⇧F"
+    : "Ctrl+Shift+F";
 
 export function ProjectWorkspace({
   tab,
@@ -17,8 +24,52 @@ export function ProjectWorkspace({
   const selected = tab.selectedId
     ? (tab.loaded.graph.methods[tab.selectedId] ?? null)
     : null;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [focusRequest, setFocusRequest] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.code === "KeyF"
+      ) {
+        const target = event.target as HTMLElement | null;
+        if (
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable)
+        ) {
+          return;
+        }
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const handleSearchPick = (methodId: string) => {
+    setSearchOpen(false);
+    onSelect(methodId);
+    setFocusRequest({ id: methodId, nonce: Date.now() });
+  };
+
   return (
     <section className="project-workspace">
+      {searchOpen && (
+        <SearchPalette
+          projectId={tab.loaded.project_id}
+          onPick={handleSearchPick}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
       <ClassExplorer
         graph={tab.loaded.graph}
         selectedId={tab.selectedId}
@@ -29,6 +80,7 @@ export function ProjectWorkspace({
           graph={tab.loaded.graph}
           selectedId={tab.selectedId}
           onSelect={onSelect}
+          focusRequest={focusRequest}
         />
         {tab.loading && (
           <div className="refresh-indicator">Refreshing graph…</div>
@@ -45,6 +97,12 @@ export function ProjectWorkspace({
       )}
       <footer className="bottom-bar">
         <span>{tab.title}</span>
+        <button
+          title={`Search methods (${searchShortcutLabel})`}
+          onClick={() => setSearchOpen(true)}
+        >
+          Search {searchShortcutLabel}
+        </button>
         <button title="Toggle code editor" onClick={onToggleEditor}>
           ‹›
         </button>

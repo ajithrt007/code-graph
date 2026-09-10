@@ -95,7 +95,9 @@ Rules that must not be broken:
 - Stable string **IDs** identify methods everywhere (see §5); display names
   are cosmetic.
 - Commands are query-oriented and independent of React Flow shapes:
-  `analyze_solution`, `get_graph`, `get_method`, `get_callers`, `get_callees`.
+  `list_projects`, `open_project`, `load_project`, `refresh_project`,
+  `close_project`, `get_method`, `get_callers`, `get_callees`,
+  `get_method_source`, `save_method_source`, `search_methods`.
 
 ### Data flow (one full analysis)
 
@@ -106,7 +108,8 @@ Sidebar "Analyze" (path)
  -> ipc:analyze_solution -> GraphService.analyze
  -> CSharpAnalyzer.analyze_path
      - SolutionLoader.discover_projects   (dotnet sln list / direct .csproj)
-     - roslyn_sys::Bridge::init()         (ensure dotnet; locate or build helper)
+     - roslyn_sys::Bridge::init_with_resource_dir() (installed app;
+       resource_dir from GraphService) or Bridge::init() (dev fallback)
      - per project: Bridge.analyze_to_json(csproj)
          = spawn `dotnet <RoslynBridge.dll> <csproj>`
          = C# Bridge.Main -> AnalyzeCore -> BuildGraph
@@ -175,14 +178,30 @@ strings — the domain never parses them.
 
 ## 6. Bridge resolution & build
 
-`Bridge::init()`:
-1. env `CODEGRAPH_ROSLYN_BRIDGE` → the DLL directly, else
-2. `<repo>/packages/roslyn-sys/managed/RoslynBridge/bin/{Release,Debug}/net8.0/RoslynBridge.dll`,
-   else
-3. runs `dotnet build -c Release` of the helper project once.
+`Bridge::init_with_resource_dir(resource_dir)` (installed app;
+`resource_dir` = Tauri `app.path().resource_dir()`, stored by
+`GraphService::initialize` and passed through `CSharpAnalyzer`):
+1. env `CODEGRAPH_ROSLYN_BRIDGE` → that executable directly (explicit
+   override, always wins), else
+2. `<resource_dir>/resources/roslyn-bridge/RoslynBridge[.exe]` (the
+   installer-embedded copy; `bundle.resources` in `tauri.conf.json`
+   preserves the `resources/roslyn-bridge/` relative structure), else
+3. `<resource_dir>/roslyn-bridge/RoslynBridge[.exe]` (flattened fallback), else
+4. the dev-tree publish dir below.
 
-Requires .NET 8 SDK + NuGet restore on first build. `dotnet` failure produces
-a clear error surfaced to the UI.
+`Bridge::init()` (dev/tests): steps 1 and 4 only.
+
+Found executables get a best-effort `chmod +x` on unix (bundlers/zips can
+strip the apphost's exec bit).
+
+Build/packaging: `scripts/build-roslyn-bridge.sh <rid>` publishes the
+self-contained bundle (embeds the .NET runtime; needs the .NET SDK once),
+then `scripts/collect-roslyn-bridge.sh <rid>` stages it into
+`apps/desktop/src-tauri/resources/roslyn-bridge/` (gitignored, regenerated
+every build). CI (`release.yml`) and `scripts/run-local.sh` both run publish
+→ collect before `tauri build`/`tauri dev`, so **release installers work
+with zero manual setup** — no separate RoslynBridge download, no env var,
+no .NET on the end-user machine.
 
 ## 7. Frontend highlighting
 

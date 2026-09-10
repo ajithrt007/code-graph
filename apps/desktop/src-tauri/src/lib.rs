@@ -37,6 +37,7 @@ pub fn run() {
             crate::ipc::get_callees,
             crate::ipc::get_method_source,
             crate::ipc::save_method_source,
+            crate::ipc::search_methods,
         ])
         .setup(|app| {
             app.state::<AppState>()
