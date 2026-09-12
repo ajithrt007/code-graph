@@ -50,7 +50,9 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libfuse2 \
+            fuse
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
@@ -82,6 +84,10 @@ jobs:
       - name: Build Tauri application
         run: npm run tauri:build
         working-directory: apps/desktop
+        env:
+          # linuxdeploy itself ships as an AppImage; runners have no /dev/fuse,
+          # so force extract-and-run mode (fixes `failed to run linuxdeploy`).
+          APPIMAGE_EXTRACT_AND_RUN: 1
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
