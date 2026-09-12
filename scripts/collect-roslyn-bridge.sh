@@ -36,6 +36,9 @@ rm -rf "$dest_dir"
 mkdir -p "$dest_dir"
 # Trailing `/.` copies contents (including dotfiles) and preserves exec bits.
 cp -R "$publish_dir/." "$dest_dir/"
+# Drop debug symbols: not needed at runtime, and keeps linuxdeploy/AppImage
+# from scanning extra payload (~114MB bundle already stresses the packager).
+rm -f "$dest_dir"/*.pdb
 
 echo "Staged RoslynBridge ($rid) into $dest_dir"
 ls "$dest_dir"
