@@ -87,6 +87,14 @@ has **no commits yet** (all code is untracked).
 Rules that must not be broken:
 - **Roslyn never leaks.** The managed helper returns JSON only. `roslyn-sys`
   exposes domain value types, never `IMethodSymbol`.
+- **No OS toolchain dependency at runtime.** The shipped app must work on a
+  machine with no .NET SDK/runtime installed. `SolutionLoader` parses `.sln`
+  (`Project(...) = ...` lines) and `.csproj` (`<TargetFramework>` /
+  `<TargetFrameworks>`) as plain text — never spawn `dotnet` (`sln list`,
+  `msbuild`, or otherwise). The only child process the app may spawn is the
+  self-contained `RoslynBridge` bundle, which embeds its own runtime.
+  On Windows, spawn it with `CREATE_NO_WINDOW` so no console flashes.
+  (Build-time use of the .NET SDK to *publish* the helper is fine.)
 - **React Flow never leaks** into domain/backend code. The frontend converts
   domain graphs to `Node[]`/`Edge[]` only in `graph/adapter.ts`.
 - Frontend and backend do **not** duplicate business logic. Callers/callees
@@ -107,11 +115,11 @@ Sidebar "Analyze" (path)
  -> invoke("analyze_solution", { args: { path } })     // note `args:` wrapper
  -> ipc:analyze_solution -> GraphService.analyze
  -> CSharpAnalyzer.analyze_path
-     - SolutionLoader.discover_projects   (dotnet sln list / direct .csproj)
+     - SolutionLoader.discover_projects   (parses .sln/.csproj as text; no SDK)
      - roslyn_sys::Bridge::init_with_resource_dir() (installed app;
        resource_dir from GraphService) or Bridge::init() (dev fallback)
      - per project: Bridge.analyze_to_json(csproj)
-         = spawn `dotnet <RoslynBridge.dll> <csproj>`
+         = spawn self-contained `RoslynBridge[.exe] <csproj>` (CREATE_NO_WINDOW on Windows)
          = C# Bridge.Main -> AnalyzeCore -> BuildGraph
          = JSON { "methods": [...], "edges": [...], "error": "..." } on stdout
      - parse_graph -> dto::AnalysisGraph -> into_domain() [roslyn-sys domain]
@@ -134,7 +142,9 @@ commands deref `state.graph` (an `Arc<GraphService>`). Keep it that way.
 
 ## 4. The C# analyzer (`managed/RoslynBridge/Bridge.cs`)
 
-Runs as `dotnet RoslynBridge.dll <path>`; prints exactly one JSON doc to
+Runs as a self-contained `RoslynBridge[.exe] <path>` (published with
+`dotnet publish --self-contained`, embeds the .NET runtime, needs no SDK on
+the target machine); prints exactly one JSON doc to
 stdout. Reference notes:
 
 - **AdhocWorkspace** project created from the .csproj path. All `*.cs` under
@@ -254,7 +264,6 @@ implicit `Order` record ctor) are correctly excluded. `FindById(int)` vs
 - Only CALLS relationships exist (`RelationshipKind::Calls`); the enum is
   ready for overrides/interface-impl kinds.
 - Grid layout only; no fit-to-content after selection (initial `fitView`).
-- Repeated `dotnet` spawn per project — slow for large solutions.
 - `packages/roslyn-sys/src/analysis.rs` is a reserved placeholder (empty).
 
 ## 10. Suggested next steps (in priority order)
@@ -263,8 +272,8 @@ implicit `Order` record ctor) are correctly excluded. `FindById(int)` vs
    `cargo test`, `npm run build`, `tauri dev`), fix whatever the manual
    review missed, and confirm §8's oracle for `examples/OrderSystem`.
 2. **Project references**: pass the list of sibling project paths to the
-   helper (or use `MSBuildWorkspace` / `dotnet` metadata refs) so
-   cross-project edges resolve.
+   helper (parsed from `<ProjectReference>` entries, still no `dotnet`
+   subprocess) so cross-project edges resolve.
 3. **Automated tests**: Rust unit tests (graph_service, commands), C# helper
    golden tests over the example, and a frontend component test for
    `applySelection` roles.

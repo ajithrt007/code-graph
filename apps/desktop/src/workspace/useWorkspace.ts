@@ -17,17 +17,28 @@ export interface ProjectTab {
   loading: boolean;
   error: string | null;
 }
-const message = (value: unknown) =>
-  value instanceof Error
-    ? value.message
-    : typeof value === "string"
-      ? value
-      : String(value);
+const message = (value: unknown): string => {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message) {
+      return record.message;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
 
 export function useWorkspace() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [tabs, setTabs] = useState<ProjectTab[]>([]);
   const [activeTab, setActiveTab] = useState<string>("projects");
+  const [opening, setOpening] = useState(false);
   const timers = useRef(new Map<string, number>());
   const reloadProjects = useCallback(
     () =>
@@ -70,22 +81,28 @@ export function useWorkspace() {
 
   const openPath = useCallback(
     async (path: string) => {
+      setOpening(true);
       try {
         addLoaded(await tauri.openProject(path));
         await reloadProjects();
       } catch (error) {
         window.alert(`Could not open project: ${message(error)}`);
+      } finally {
+        setOpening(false);
       }
     },
     [addLoaded, reloadProjects],
   );
   const openRecent = useCallback(
     async (projectId: string) => {
+      setOpening(true);
       try {
         addLoaded(await tauri.loadProject(projectId));
         await reloadProjects();
       } catch (error) {
         window.alert(`Could not open project: ${message(error)}`);
+      } finally {
+        setOpening(false);
       }
     },
     [addLoaded, reloadProjects],
@@ -208,6 +225,7 @@ export function useWorkspace() {
     projects,
     tabs,
     activeTab,
+    opening,
     setActiveTab,
     openPath,
     openRecent,
