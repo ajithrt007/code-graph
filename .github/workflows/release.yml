@@ -82,12 +82,15 @@ jobs:
         run: npm ci
         working-directory: apps/desktop
       - name: Build Tauri application
-        run: npm run tauri:build
+        shell: bash
         working-directory: apps/desktop
-        env:
-          # linuxdeploy itself ships as an AppImage; runners have no /dev/fuse,
-          # so force extract-and-run mode (fixes `failed to run linuxdeploy`).
-          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          if [[ "${{ matrix.rid }}" == linux-* ]]; then
+            # Skip AppImage (linuxdeploy) on Linux; ship deb+rpm only.
+            npm run tauri:build -- --bundles deb,rpm
+          else
+            npm run tauri:build
+          fi
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
