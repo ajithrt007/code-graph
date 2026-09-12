@@ -1,12 +1,16 @@
 //! Loads a .NET solution or project and exposes its compilations.
 //!
-//! This is intentionally a thin wrapper around `dotnet`/`Roslyn` so the rest
-//! of the analyzer can work purely against `Microsoft.CodeAnalysis`
-//! types. All Roslyn types stay inside this module and its callers in the
-//! `analysis` submodule; they do not escape into the application layer.
+//! Discovery parses `.sln` and `.csproj` files as plain text. It never
+//! shells out to the `dotnet` SDK, so the shipped app works on machines
+//! with no .NET toolchain installed: the Roslyn analysis itself runs in
+//! the self-contained RoslynBridge bundle (which embeds the runtime), and
+//! everything this loader needs — project list, target framework — is
+//! readable directly from the project files.
+//!
+//! This also keeps "open project" fast and, on Windows, free of flashing
+//! `dotnet.exe` console windows (one per spawn without CREATE_NO_WINDOW).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 
@@ -19,7 +23,8 @@ pub struct ProjectDescriptor {
     pub target_framework: Option<String>,
 }
 
-/// Loads .NET solutions and projects via `dotnet`.
+/// Loads .NET solutions and projects by reading their files directly —
+/// no `dotnet` SDK required.
 #[derive(Debug, Default, Clone)]
 pub struct SolutionLoader;
 
@@ -30,9 +35,9 @@ impl SolutionLoader {
 
     /// Resolve a user-provided path to one or more `.csproj` projects.
     ///
-    /// Accepts either a `.sln` (expanded via `dotnet sln list`) or a
-    /// `.csproj` directly. The target framework is queried from
-    /// `dotnet build` properties; if unavailable, `None` is returned.
+    /// Accepts either a `.sln` (projects parsed out of the solution file)
+    /// or a `.csproj` directly. The target framework is read from the
+    /// `.csproj` XML; if unavailable, `None` is returned.
     pub fn discover_projects(&self, input: &Path) -> Result<Vec<ProjectDescriptor>> {
         if !input.exists() {
             return Err(anyhow!("path does not exist: {}", input.display()));
@@ -59,7 +64,7 @@ impl SolutionLoader {
                 return self.discover_from_sln(&s);
             }
             if let Some(p) = csproj {
-                return Ok(vec![self.describe_project(&p)?]);
+                return Ok(vec![self.describe_project(&p)]);
             }
             return Err(anyhow!(
                 "no .sln or .csproj found in directory {}",
@@ -74,7 +79,7 @@ impl SolutionLoader {
             .as_deref()
         {
             Some("sln") => self.discover_from_sln(&canonical),
-            Some("csproj") => Ok(vec![self.describe_project(&canonical)?]),
+            Some("csproj") => Ok(vec![self.describe_project(&canonical)]),
             other => Err(anyhow!(
                 "unsupported input `{}` (expected .sln, .csproj, or a directory)",
                 other.unwrap_or("<no extension>")
@@ -83,45 +88,29 @@ impl SolutionLoader {
     }
 
     fn discover_from_sln(&self, sln: &Path) -> Result<Vec<ProjectDescriptor>> {
-        // Use `dotnet sln list` to enumerate projects. This is the most
-        // portable approach and avoids re-implementing the .sln parser.
-        let output = Command::new("dotnet")
-            .arg("sln")
-            .arg(sln)
-            .arg("list")
-            .output()
-            .with_context(|| format!("failed to run `dotnet sln list` on {}", sln.display()))?;
-
-        if !output.status.success() {
-            return Err(anyhow!(
-                "`dotnet sln list` failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Parse the .sln text directly instead of `dotnet sln list`.
+        // Project lines look like:
+        //   Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App.csproj", "{GUID}"
+        // Solution folders and non-C# projects never reference a `.csproj`,
+        // so filtering on that extension skips them naturally.
+        let text = std::fs::read_to_string(sln)
+            .with_context(|| format!("failed to read solution {}", sln.display()))?;
         let sln_dir = sln.parent().unwrap_or_else(|| Path::new("."));
+
         let mut projects = Vec::new();
-        for raw in stdout.lines() {
-            let line = raw.trim();
-            if line.is_empty() {
+        for raw in text.lines() {
+            let Some(path_str) = sln_project_path(raw) else {
                 continue;
-            }
-            // Skip header lines like "Project(s)" and "----------".
-            if line.contains("---") || line.eq_ignore_ascii_case("project(s)") {
-                continue;
-            }
-            // Tokens are space-separated; the path is the last token (or the
-            // only token for absolute paths).
-            let path_str = line.split_whitespace().last().unwrap_or(line);
-            let path = if Path::new(path_str).is_absolute() {
-                PathBuf::from(path_str)
-            } else {
-                sln_dir.join(path_str)
             };
-            if path.extension().and_then(|e| e.to_str()) == Some("csproj") {
-                projects.push(self.describe_project(&path)?);
-            }
+            // Solution files use Windows separators even when read on
+            // Unix; normalize so relative joins work everywhere.
+            let relative = path_str.replace('\\', "/");
+            let path = if Path::new(&relative).is_absolute() {
+                PathBuf::from(relative)
+            } else {
+                sln_dir.join(relative)
+            };
+            projects.push(self.describe_project(&path));
         }
 
         if projects.is_empty() {
@@ -133,53 +122,213 @@ impl SolutionLoader {
         Ok(projects)
     }
 
-    fn describe_project(&self, csproj: &Path) -> Result<ProjectDescriptor> {
-        let tfm = self.query_target_framework(csproj).ok();
-        Ok(ProjectDescriptor {
+    fn describe_project(&self, csproj: &Path) -> ProjectDescriptor {
+        ProjectDescriptor {
             project_path: csproj.to_path_buf(),
-            target_framework: tfm,
-        })
+            target_framework: read_target_framework(csproj),
+        }
+    }
+}
+
+/// Extract the `.csproj` path from a `.sln` `Project(...) = ...` line, or
+/// `None` for any other line (headers, solution folders, C++ projects).
+fn sln_project_path(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if !line.starts_with("Project(") {
+        return None;
+    }
+    let rhs = line.split_once('=')?.1;
+    // Quoted segments: name, path, guid. The path is the first segment
+    // ending in `.csproj`.
+    let mut segments = Vec::new();
+    let mut rest = rhs;
+    while let Some(start) = rest.find('"') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('"') else {
+            break;
+        };
+        segments.push(after[..end].trim());
+        rest = &after[end + 1..];
+    }
+    segments.into_iter().find(|segment| {
+        segment.len() > ".csproj".len()
+            && segment
+                .get(segment.len() - ".csproj".len()..)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(".csproj"))
+    })
+}
+
+/// Read `<TargetFramework>` (or the first entry of `<TargetFrameworks>`)
+/// from a `.csproj` file. Returns `None` when the file can't be read or
+/// declares no framework — callers treat this as informational only.
+fn read_target_framework(csproj: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(csproj).ok()?;
+    let value = tag_value(&text, "TargetFramework")
+        .or_else(|| tag_value(&text, "TargetFrameworks"))?;
+    let first = value.split(';').next()?.trim();
+    if first.is_empty() {
+        None
+    } else {
+        Some(first.to_string())
+    }
+}
+
+/// Contents of a simple `<Tag>value</Tag>` element. MSBuild tags are
+/// case-sensitive and never carry attributes for these two names, so an
+/// exact scan is sufficient — no XML parser needed.
+fn tag_value(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(open.as_str())? + open.len();
+    let rest = text.get(start..)?;
+    let end = rest.find(close.as_str())?;
+    let value = rest.get(..end)?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "codegraph-loader-test-{}-{}-{}",
+            std::process::id(),
+            tag,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp test dir");
+        // Canonicalize: temp roots are symlinked on some OSes (macOS
+        // /var -> /private/var) and discovery canonicalizes inputs.
+        dir.canonicalize().expect("canonicalize temp test dir")
     }
 
-    fn query_target_framework(&self, csproj: &Path) -> Result<String> {
-        // `dotnet msbuild -getProperty:TargetFramework` is supported by
-        // modern SDKs. Fall back to `TargetFrameworks` if multi-targeted.
-        let try_prop = |name: &str| -> Result<String> {
-            let output = Command::new("dotnet")
-                .arg("msbuild")
-                .arg(csproj)
-                .arg(format!("-getProperty:{}", name))
-                .output()
-                .with_context(|| {
-                    format!("failed to run `dotnet msbuild -getProperty:{}`", name)
-                })?;
-            if !output.status.success() {
-                return Err(anyhow!(
-                    "msbuild -getProperty:{} failed: {}",
-                    name,
-                    String::from_utf8_lossy(&output.stderr)
-                ));
-            }
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if s.is_empty() {
-                Err(anyhow!("empty property"))
-            } else {
-                Ok(s)
-            }
-        };
+    fn write(path: &Path, contents: &str) {
+        std::fs::create_dir_all(path.parent().expect("test file has parent"))
+            .expect("create test parent");
+        std::fs::write(path, contents).expect("write test file");
+    }
 
-        if let Ok(v) = try_prop("TargetFramework") {
-            // Multi-targeted projects may report a semicolon-separated list
-            // under `TargetFrameworks`.
-            if let Some(first) = v.split(';').next() {
-                return Ok(first.trim().to_string());
-            }
-        }
-        try_prop("TargetFrameworks").and_then(|v| {
-            v.split(';')
-                .next()
-                .map(|s| s.trim().to_string())
-                .ok_or_else(|| anyhow!("no target framework"))
-        })
+    const SLN: &str = r#"
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "App", "src\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Lib", "Lib\Lib.csproj", "{22222222-2222-2222-2222-222222222222}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{33333333-3333-3333-3333-333333333333}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Native", "Native\Native.vcxproj", "{44444444-4444-4444-4444-444444444444}"
+EndProject
+Global
+EndGlobal
+"#;
+
+    #[test]
+    fn sln_parsing_finds_csproj_projects_only() {
+        let dir = unique_dir("sln");
+        let sln = dir.join("App.sln");
+        write(&sln, SLN);
+        write(&dir.join("src").join("App.csproj"), "<Project></Project>");
+        write(&dir.join("Lib").join("Lib.csproj"), "<Project></Project>");
+
+        let loader = SolutionLoader::new();
+        let projects = loader.discover_projects(&sln).expect("discover");
+        let mut paths: Vec<_> = projects
+            .iter()
+            .map(|p| p.project_path.clone())
+            .collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![dir.join("Lib").join("Lib.csproj"), dir.join("src").join("App.csproj")],
+            "expected the two .csproj entries (folders/vcxproj skipped)"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sln_without_csproj_is_an_error() {
+        let dir = unique_dir("sln-empty");
+        let sln = dir.join("Empty.sln");
+        write(&sln, "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+
+        let err = SolutionLoader::new()
+            .discover_projects(&sln)
+            .expect_err("should fail");
+        assert!(
+            err.to_string().contains("no .csproj projects found"),
+            "unexpected error: {err}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn target_framework_prefers_single_over_list() {
+        let dir = unique_dir("tfm");
+        let single = dir.join("Single.csproj");
+        write(
+            &single,
+            "<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>",
+        );
+        let multi = dir.join("Multi.csproj");
+        write(
+            &multi,
+            "<Project><PropertyGroup><TargetFrameworks>net8.0;net10.0</TargetFrameworks></PropertyGroup></Project>",
+        );
+        let none = dir.join("None.csproj");
+        write(&none, "<Project></Project>");
+
+        assert_eq!(
+            read_target_framework(&single).as_deref(),
+            Some("net10.0")
+        );
+        assert_eq!(
+            read_target_framework(&multi).as_deref(),
+            Some("net8.0"),
+            "multi-targeted takes the first entry"
+        );
+        assert_eq!(read_target_framework(&none), None);
+        assert_eq!(
+            read_target_framework(&dir.join("Missing.csproj")),
+            None,
+            "unreadable file degrades to None"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn directory_prefers_sln_over_csproj() {
+        let dir = unique_dir("dir");
+        write(&dir.join("Only.csproj"), "<Project></Project>");
+        write(
+            &dir.join("Via.csproj"),
+            "<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>",
+        );
+        write(
+            &dir.join("All.sln"),
+            "Project(\"{9A19103F-16F7-4668-BE54-9A1E7A4F7556}\") = \"Via\", \"Via.csproj\", \"{55555555-5555-5555-5555-555555555555}\"\nEndProject\n",
+        );
+
+        let projects = SolutionLoader::new()
+            .discover_projects(&dir)
+            .expect("discover");
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].project_path, dir.join("Via.csproj"));
+        assert_eq!(
+            projects[0].target_framework.as_deref(),
+            Some("net10.0")
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

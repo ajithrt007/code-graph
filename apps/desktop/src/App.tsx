@@ -17,6 +17,7 @@ export default function App() {
       {workspace.activeTab === "projects" ? (
         <ProjectsScreen
           projects={workspace.projects}
+          opening={workspace.opening}
           onOpenPath={workspace.openPath}
           onOpenRecent={workspace.openRecent}
         />

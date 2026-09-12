@@ -165,6 +165,11 @@ button {
     opacity: .5;
 }
 
+.project-opening {
+    margin-top: 12px;
+    color: var(--accent);
+}
+
 .project-list {
     overflow: auto;
     padding: 48px;
