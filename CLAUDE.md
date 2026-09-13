@@ -191,19 +191,25 @@ strings — the domain never parses them.
 `Bridge::init_with_resource_dir(resource_dir)` (installed app;
 `resource_dir` = Tauri `app.path().resource_dir()`, stored by
 `GraphService::initialize` and passed through `CSharpAnalyzer`):
-1. env `CODEGRAPH_ROSLYN_BRIDGE` → that executable directly (explicit
-   override, always wins), else
+1. env `CODEGRAPH_ROSLYN_BRIDGE` → that executable directly when it exists;
+   a stale value is recorded and the search continues (a leftover env var
+   must not brick the installed app — this was the Windows init failure:
+   the v3.1.0 NSIS/MSI installers were verified to bundle the helper, but a
+   stale override hard-failed before any path was searched), else
 2. `<resource_dir>/resources/roslyn-bridge/RoslynBridge[.exe]` (the
    installer-embedded copy; `bundle.resources` in `tauri.conf.json`
    preserves the `resources/roslyn-bridge/` relative structure), else
 3. `<resource_dir>/roslyn-bridge/RoslynBridge[.exe]` (flattened fallback), else
-4. the same two layouts relative to the running executable's own directory
+4. `<resource_dir>/RoslynBridge[.exe]` (helper repackaged at the base root), else
+5. the same three layouts relative to the running executable's own directory
    (`std::env::current_exe`; covers installs where `resource_dir()`
    doesn't point at the bundle root — observed on Windows), else
-5. the dev-tree publish dir below.
+6. the dev-tree publish dir below.
 
-   A miss returns an error listing every path searched, so the popup names
-   the exact locations checked.
+   A miss returns an error listing the env note, every path searched, and
+   the runtime `resource_dir`/`current_exe` values. The backend converts
+   failures with `{e:#}` (never `to_string()` — anyhow's Display drops the
+   cause chain), so the popup names the exact locations checked.
 
 `Bridge::init()` (dev/tests): steps 1 and 4 only.
 
