@@ -13,9 +13,10 @@ export interface MethodNodeData extends Record<string, unknown> {
   method: MethodNode;
   /**
    * Visual role used by `MethodNode.tsx` to style the node.
-   * - `default`    : not part of the current selection's neighborhood
+   * - `default`    : outside the selection's impact tree (dimmed on select)
    * - `selected`   : the currently-selected node
-   * - `caller`     : directly calls the selected node
+   * - `caller`     : calls the selected node, directly or transitively
+   *                  (impact chain toward the left-most entry points)
    * - `callee`     : directly called by the selected node
    */
   role: "default" | "selected" | "caller" | "callee";
@@ -38,10 +39,20 @@ const EDGE_STYLE: Record<NodeRole, CSSProperties> = {
   callee: { stroke: "var(--accent-callee)", strokeWidth: 2, opacity: 1 },
 };
 
-// Layout constants
-const CLASS_H_SPACING = 350;
-const METHOD_V_SPACING = 90;
-const CLASS_TOP_MARGIN = 50;
+// Tree layout constants: horizontal = call depth (entry points left,
+// downstream/external dependencies right), vertical = alphabetical order
+// within a level. Spacing sized so node cards (~160px wide, ~60px tall)
+// never overlap.
+const TREE_H_SPACING = 340;
+const TREE_V_SPACING = 120;
+
+/** Opacity applied to nodes/edges outside the selection's impact tree. */
+export const DIMMED_NODE_OPACITY = 0.25;
+const DIMMED_EDGE_STYLE: CSSProperties = {
+  stroke: "var(--border)",
+  strokeWidth: 1.5,
+  opacity: 0.15,
+};
 
 interface ClassNode {
   id: string;
@@ -141,18 +152,118 @@ function topologicalSort(depGraph: {
   return result;
 }
 
-function assignPositions(sortedClasses: ClassNode[]): void {
-  sortedClasses.forEach((cls, classIndex) => {
-    cls.x = classIndex * CLASS_H_SPACING;
-    cls.y = CLASS_TOP_MARGIN;
-    cls.methods.forEach((method, methodIndex) => {
-      (method as MethodNode & { _layout?: { x: number; y: number } })._layout =
-        {
-          x: cls.x,
-          y: cls.y + methodIndex * METHOD_V_SPACING,
-        };
+function compareMethods(a: MethodNode, b: MethodNode): number {
+  // Alphabetical by method name (`OrderService.GetOrder(int)` sorts under
+  // "GetOrder", not under its class), then display name, then id.
+  const byName = (a.name || a.id).toLowerCase().localeCompare(
+    (b.name || b.id).toLowerCase(),
+  );
+  if (byName !== 0) return byName;
+  const byDisplay = (a.display_name || "")
+    .toLowerCase()
+    .localeCompare((b.display_name || "").toLowerCase());
+  return byDisplay !== 0 ? byDisplay : a.id.localeCompare(b.id);
+}
+
+/**
+ * Tree-style layout: depth = shortest call distance from the nearest entry
+ * point (in-degree 0). Entry points sit at x=0 (left), downstream
+ * dependencies to the right. Nodes sharing a depth are ordered
+ * alphabetically by method name. Deliberately ignores containing_type so
+ * methods of the same class can spread across levels.
+ */
+function computeTreePositions(
+  graph: MethodGraph,
+): Map<string, { x: number; y: number }> {
+  const methods = Object.values(graph.methods);
+  const positions = new Map<string, { x: number; y: number }>();
+  if (methods.length === 0) return positions;
+
+  const outgoing = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+  for (const m of methods) {
+    outgoing.set(m.id, []);
+    inDegree.set(m.id, 0);
+  }
+  for (const edge of graph.edges) {
+    if (!outgoing.has(edge.source) || !inDegree.has(edge.target)) continue;
+    outgoing.get(edge.source)!.push(edge.target);
+    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+  }
+
+  const depth = new Map<string, number>();
+  const queue: string[] = [];
+  const seedRoots = methods
+    .filter((m) => (inDegree.get(m.id) ?? 0) === 0)
+    .sort(compareMethods);
+  // Fully-cyclic graph: seed from the alphabetically-first node so every
+  // node still gets a finite depth.
+  const seeds = seedRoots.length > 0 ? seedRoots : [...methods].sort(compareMethods).slice(0, 1);
+  for (const root of seeds) {
+    depth.set(root.id, 0);
+    queue.push(root.id);
+  }
+  while (queue.length) {
+    const id = queue.shift()!;
+    const nextDepth = depth.get(id)! + 1;
+    for (const target of outgoing.get(id) ?? []) {
+      if (depth.has(target)) continue;
+      depth.set(target, nextDepth);
+      queue.push(target);
+    }
+  }
+  // Disconnected cyclic components unreachable from the seeds form their
+  // own left-aligned trees.
+  let unvisited = methods.filter((m) => !depth.has(m.id)).sort(compareMethods);
+  while (unvisited.length > 0) {
+    const root = unvisited[0];
+    depth.set(root.id, 0);
+    queue.push(root.id);
+    while (queue.length) {
+      const id = queue.shift()!;
+      const nextDepth = depth.get(id)! + 1;
+      for (const target of outgoing.get(id) ?? []) {
+        if (depth.has(target)) continue;
+        depth.set(target, nextDepth);
+        queue.push(target);
+      }
+    }
+    unvisited = methods.filter((m) => !depth.has(m.id)).sort(compareMethods);
+  }
+
+  const levels = new Map<number, MethodNode[]>();
+  for (const m of methods) {
+    const d = depth.get(m.id) ?? 0;
+    const list = levels.get(d);
+    if (list) list.push(m);
+    else levels.set(d, [m]);
+  }
+  for (const [d, list] of levels) {
+    list.sort(compareMethods);
+    list.forEach((method, index) => {
+      positions.set(method.id, {
+        x: d * TREE_H_SPACING,
+        y: index * TREE_V_SPACING,
+      });
     });
-  });
+  }
+  return positions;
+}
+
+/** Id of the top-left-most node (min x, then min y). */
+export function topLeftMostNodeId(nodes: RFMethodNode[]): string | null {
+  let best: RFMethodNode | null = null;
+  for (const node of nodes) {
+    if (
+      !best ||
+      node.position.x < best.position.x ||
+      (node.position.x === best.position.x &&
+        node.position.y < best.position.y)
+    ) {
+      best = node;
+    }
+  }
+  return best?.id ?? null;
 }
 
 /** Ordered class hierarchy shared by the graph layout and left explorer. */
@@ -164,25 +275,19 @@ export function orderedClasses(graph: MethodGraph): ClassTreeItem[] {
 }
 
 /**
- * Build React Flow nodes from the domain graph using hierarchical layout:
- * - Classes ordered left-to-right by call dependency (callers left, callees right)
- * - Methods within a class stacked vertically in source order
+ * Build React Flow nodes from the domain graph using a tree-style layout:
+ * - x = call depth (entry points left, downstream dependencies right)
+ * - y = alphabetical order of method name within the level
+ * Methods of the same class are intentionally NOT pinned to one level.
  */
 export function toReactFlowNodes(graph: MethodGraph): RFMethodNode[] {
-  const classes = groupByClass(graph);
-  const sortedClasses = topologicalSort(
-    buildClassDependencyGraph(classes, graph),
-  );
-  assignPositions(sortedClasses);
+  const positions = computeTreePositions(graph);
 
   return Object.values(graph.methods).map((method) => {
-    const layout = (
-      method as MethodNode & { _layout?: { x: number; y: number } }
-    )._layout;
     return {
       id: method.id,
       type: "method",
-      position: layout ?? { x: 0, y: 0 },
+      position: positions.get(method.id) ?? { x: 0, y: 0 },
       data: { method, role: "default" },
     };
   });
@@ -202,7 +307,12 @@ export function toReactFlowEdges(graph: MethodGraph): RFCallEdge[] {
 
 /**
  * Given a selected method, return new nodes/edges where the selection's
- * neighbors are highlighted and unrelated nodes/edges are de-emphasized.
+ * impact tree is highlighted and unrelated nodes/edges are de-emphasized.
+ *
+ * - Callees: direct callees only (unchanged behavior).
+ * - Callers: the full recursive chain toward the left-most entry points,
+ *   so the potential impact of changing the selected method is visible.
+ * - Unrelated nodes/edges get reduced opacity to emphasize the tree.
  *
  * This is the only place selection logic lives; React Flow components
  * just render whatever role they get.
@@ -216,29 +326,42 @@ export function applySelection(
   if (!selectedId) {
     return { nodes, edges };
   }
+  // Recursive impact chain upstream; direct neighbors downstream.
   const callerIds = new Set(
-    graphOps.callersOf(graph, selectedId).map((m) => m.id),
+    graphOps.ancestorsOf(graph, selectedId).map((m) => m.id),
   );
   const calleeIds = new Set(
     graphOps.calleesOf(graph, selectedId).map((m) => m.id),
   );
+  // Every node that can reach the selection (plus the selection itself)
+  // marks the upstream chain; edges inside that set are impact edges.
+  const upstream = new Set([selectedId, ...callerIds]);
 
   const nextNodes = nodes.map((n) => {
     let role: NodeRole = "default";
     if (n.id === selectedId) role = "selected";
     else if (callerIds.has(n.id)) role = "caller";
     else if (calleeIds.has(n.id)) role = "callee";
-    return { ...n, data: { ...n.data, role } };
+    const dimmed = role === "default";
+    return {
+      ...n,
+      data: { ...n.data, role },
+      style: dimmed ? { opacity: DIMMED_NODE_OPACITY } : { opacity: 1 },
+    };
   });
 
   const nextEdges = edges.map((e) => {
     let role: NodeRole = "default";
-    if (e.target === selectedId && callerIds.has(e.source)) {
+    if (upstream.has(e.target) && callerIds.has(e.source)) {
       role = "caller";
     } else if (e.source === selectedId && calleeIds.has(e.target)) {
       role = "callee";
     }
-    return { ...e, data: { ...(e.data ?? {}), role }, style: EDGE_STYLE[role] };
+    return {
+      ...e,
+      data: { ...(e.data ?? {}), role },
+      style: role === "default" ? DIMMED_EDGE_STYLE : EDGE_STYLE[role],
+    };
   });
 
   return { nodes: nextNodes, edges: nextEdges };

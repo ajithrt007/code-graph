@@ -77,6 +77,7 @@ export function ProjectWorkspace({
       />
       <main className="project-workspace__graph">
         <GraphView
+          projectId={tab.loaded.project_id}
           graph={tab.loaded.graph}
           selectedId={tab.selectedId}
           onSelect={onSelect}
