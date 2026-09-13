@@ -68,13 +68,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Focused on windows/mac x64 for faster development (mirrors
+        # release.yml); re-enable linux/arm when needed.
         include:
-          - os: ubuntu-22.04
-            rid: linux-x64
-          - os: macos-14
-            rid: osx-arm64
+          - os: macos-15-intel
+            rid: osx-x64
           - os: windows-2022
             rid: win-x64
+          # - os: ubuntu-22.04
+          #   rid: linux-x64
+          # - os: macos-14
+          #   rid: osx-arm64
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies

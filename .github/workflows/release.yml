@@ -15,25 +15,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Focused on windows/mac x64 for faster development. Linux and all
+        # arm targets are temporarily commented out — re-enable when needed.
         include:
-          - target: macos-arm64
-            runner: macos-14
-            rid: osx-arm64
           - target: macos-x64
             runner: macos-15-intel
             rid: osx-x64
-          - target: linux-x64
-            runner: ubuntu-22.04
-            rid: linux-x64
-          - target: linux-arm64
-            runner: ubuntu-22.04-arm
-            rid: linux-arm64
           - target: windows-x64
             runner: windows-2022
             rid: win-x64
-          - target: windows-arm64
-            runner: windows-11-arm
-            rid: win-arm64
+          # - target: macos-arm64
+          #   runner: macos-14
+          #   rid: osx-arm64
+          # - target: linux-x64
+          #   runner: ubuntu-22.04
+          #   rid: linux-x64
+          # - target: linux-arm64
+          #   runner: ubuntu-22.04-arm
+          #   rid: linux-arm64
+          # - target: windows-arm64
+          #   runner: windows-11-arm
+          #   rid: win-arm64
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies

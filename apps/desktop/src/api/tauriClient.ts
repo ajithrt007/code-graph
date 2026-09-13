@@ -17,6 +17,8 @@ export const tauri = {
     invoke<LoadedGraph>("refresh_project", { args: { project_id: projectId } }),
   closeProject: (projectId: string) =>
     invoke<void>("close_project", { args: { project_id: projectId } }),
+  deleteProject: (projectId: string) =>
+    invoke<void>("delete_project", { args: { project_id: projectId } }),
   getMethod: (projectId: string, id: string) =>
     invoke<MethodNode>("get_method", { args: { project_id: projectId, id } }),
   getCallers: (projectId: string, id: string) =>

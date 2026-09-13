@@ -32,6 +32,7 @@ pub fn run() {
             crate::ipc::load_project,
             crate::ipc::refresh_project,
             crate::ipc::close_project,
+            crate::ipc::delete_project,
             crate::ipc::get_method,
             crate::ipc::get_callers,
             crate::ipc::get_callees,

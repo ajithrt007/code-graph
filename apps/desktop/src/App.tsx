@@ -18,8 +18,13 @@ export default function App() {
         <ProjectsScreen
           projects={workspace.projects}
           opening={workspace.opening}
+          log={workspace.openLog}
+          progress={workspace.openProgress}
+          failed={workspace.openFailed}
           onOpenPath={workspace.openPath}
           onOpenRecent={workspace.openRecent}
+          onDeleteProject={workspace.deleteProject}
+          onDismissLog={workspace.dismissOpenLog}
         />
       ) : active ? (
         <ProjectWorkspace

@@ -11,5 +11,5 @@
 pub mod csharp_analyzer;
 pub mod solution_loader;
 
-pub use csharp_analyzer::CSharpAnalyzer;
+pub use csharp_analyzer::{CSharpAnalyzer, LoadProgress};
 pub use solution_loader::SolutionLoader;
