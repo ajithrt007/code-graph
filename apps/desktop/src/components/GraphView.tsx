@@ -72,14 +72,21 @@ export function GraphView({
   const nodeIdsRef = useRef<Set<string>>(new Set());
   nodeIdsRef.current = new Set(baseNodes.map((n) => n.id));
 
+  // Pan the viewport so the node's center is the viewport's center.
+  // Uses the measured card size (falls back to the CSS minimums before
+  // the first measurement) and preserves the current zoom: focusing is a
+  // pure pan, never a zoom jump.
   const focusNode = useCallback(
-    (id: string, maxZoom = 1) => {
-      if (!nodeIdsRef.current.has(id)) return;
-      instance?.fitView({
-        nodes: [{ id }],
+    (id: string) => {
+      if (!instance || !nodeIdsRef.current.has(id)) return;
+      const internal = instance.getNode(id);
+      const width = internal?.width ?? 180;
+      const height = internal?.height ?? 60;
+      const base =
+        internal?.positionAbsolute ?? internal?.position ?? { x: 0, y: 0 };
+      void instance.setCenter(base.x + width / 2, base.y + height / 2, {
+        zoom: instance.getZoom(),
         duration: 300,
-        padding: 0.4,
-        maxZoom,
       });
       lastCenteredRef.current = id;
     },
@@ -110,7 +117,7 @@ export function GraphView({
   }, [selectedId, focusNode]);
 
   useEffect(() => {
-    if (focusRequest) focusNode(focusRequest.id, 1.5);
+    if (focusRequest) focusNode(focusRequest.id);
   }, [focusRequest, focusNode]);
 
   return (
