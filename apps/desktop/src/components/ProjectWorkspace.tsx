@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { GraphView } from "./GraphView";
 import { ClassExplorer } from "./ClassExplorer";
 import { MethodEditor } from "./MethodEditor";
@@ -55,10 +55,20 @@ export function ProjectWorkspace({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Every selection — explorer, graph node, or search — both selects the
+  // method (editor + highlight) and focuses its graph node. The nonce
+  // re-triggers focus even when re-selecting the already-selected node.
+  const handleSelect = useCallback(
+    (methodId: string | null) => {
+      onSelect(methodId);
+      if (methodId) setFocusRequest({ id: methodId, nonce: Date.now() });
+    },
+    [onSelect],
+  );
+
   const handleSearchPick = (methodId: string) => {
     setSearchOpen(false);
-    onSelect(methodId);
-    setFocusRequest({ id: methodId, nonce: Date.now() });
+    handleSelect(methodId);
   };
 
   return (
@@ -73,14 +83,14 @@ export function ProjectWorkspace({
       <ClassExplorer
         graph={tab.loaded.graph}
         selectedId={tab.selectedId}
-        onSelect={onSelect}
+        onSelect={handleSelect}
       />
       <main className="project-workspace__graph">
         <GraphView
           projectId={tab.loaded.project_id}
           graph={tab.loaded.graph}
           selectedId={tab.selectedId}
-          onSelect={onSelect}
+          onSelect={handleSelect}
           focusRequest={focusRequest}
         />
         {tab.loading && (

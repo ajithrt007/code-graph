@@ -63,45 +63,55 @@ export function GraphView({
 
   const [instance, setInstance] = useState<ReactFlowInstance | null>(null);
   // Projects whose initial viewport was already placed. First load centers
-  // the top-left-most node; subsequent graph loads restore the selection.
+  // the top-left-most node; later arrivals center the selection instead.
   const placedRef = useRef<Set<string>>(new Set());
-  // Read at load time only so clicks don't yank the viewport.
-  const selectedRef = useRef<string | null>(selectedId);
-  selectedRef.current = selectedId;
+  // Last node the viewport was centered on. Guards the selection/focus
+  // effects so one selection triggers exactly one camera move, and lets a
+  // re-select of the same node (fresh nonce) refocus after panning away.
+  const lastCenteredRef = useRef<string | null>(null);
   const nodeIdsRef = useRef<Set<string>>(new Set());
   nodeIdsRef.current = new Set(baseNodes.map((n) => n.id));
 
-  useEffect(() => {
-    if (!instance || baseNodes.length === 0) return;
-    const alreadyPlaced = placedRef.current.has(projectId);
-    const selected = selectedRef.current;
-    const target =
-      selected && nodeIdsRef.current.has(selected)
-        ? selected
-        : !alreadyPlaced
-          ? topLeftMostNodeId(baseNodes)
-          : null;
-    if (target) {
-      instance.fitView({
-        nodes: [{ id: target }],
+  const focusNode = useCallback(
+    (id: string, maxZoom = 1) => {
+      if (!nodeIdsRef.current.has(id)) return;
+      instance?.fitView({
+        nodes: [{ id }],
         duration: 300,
         padding: 0.4,
-        maxZoom: 1,
+        maxZoom,
       });
+      lastCenteredRef.current = id;
+    },
+    [instance],
+  );
+
+  // First sight of a project: top-left-most node, unless a selection was
+  // restored (handled by the selection effect below).
+  useEffect(() => {
+    if (!instance || baseNodes.length === 0) return;
+    if (placedRef.current.has(projectId)) return;
+    placedRef.current.add(projectId);
+    if (!selectedId || !nodeIdsRef.current.has(selectedId)) {
+      const top = topLeftMostNodeId(baseNodes);
+      if (top) focusNode(top);
     }
-    if (!alreadyPlaced) placedRef.current.add(projectId);
-  }, [instance, baseNodes, projectId]);
+  }, [instance, baseNodes, projectId, selectedId, focusNode]);
+
+  // Every selection — explorer, graph node, search, tab switch, restore —
+  // brings its node to the center. Deselecting resets so re-selecting the
+  // same node after panning away refocuses it.
+  useEffect(() => {
+    if (!selectedId) {
+      lastCenteredRef.current = null;
+      return;
+    }
+    if (selectedId !== lastCenteredRef.current) focusNode(selectedId);
+  }, [selectedId, focusNode]);
 
   useEffect(() => {
-    if (focusRequest && nodeIdsRef.current.has(focusRequest.id)) {
-      instance?.fitView({
-        nodes: [{ id: focusRequest.id }],
-        duration: 300,
-        padding: 0.25,
-        maxZoom: 1.5,
-      });
-    }
-  }, [focusRequest, instance]);
+    if (focusRequest) focusNode(focusRequest.id, 1.5);
+  }, [focusRequest, focusNode]);
 
   return (
     <div className="graph-view">
