@@ -67,7 +67,41 @@ impl Serialize for AppError {
 
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        AppError::Analysis(err.to_string())
+        // `{:#}` keeps the full context chain (e.g. the Roslyn bridge's
+        // searched-paths report). `err.to_string()` would keep only the
+        // outermost message and hide the cause.
+        AppError::Analysis(format!("{err:#}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    /// The Windows bridge-init failure surfaced only as
+    /// "initializing Roslyn bridge" because the conversion dropped anyhow's
+    /// cause chain (including the searched-paths report). This locks in the
+    /// full chain reaching the frontend.
+    #[test]
+    fn analysis_error_preserves_anyhow_chain() {
+        let err = anyhow::anyhow!("no RoslynBridge bundle for win-x64; searched:\n  - C:\\app\\x")
+            .context("initializing Roslyn bridge");
+        let message = match AppError::from(err) {
+            AppError::Analysis(message) => message,
+            other => panic!("expected analysis error, got {other:?}"),
+        };
+        assert!(
+            message.contains("initializing Roslyn bridge"),
+            "outer context lost: {message}"
+        );
+        assert!(
+            message.contains("no RoslynBridge bundle for win-x64"),
+            "inner report lost: {message}"
+        );
+        assert!(
+            message.contains("searched:"),
+            "searched paths lost: {message}"
+        );
     }
 }
 

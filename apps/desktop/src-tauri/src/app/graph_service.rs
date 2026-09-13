@@ -313,7 +313,12 @@ impl GraphService {
         };
         let graph = analyzer
             .analyze_path(path, progress)
-            .map_err(|e| AppError::Analysis(e.to_string()))?;
+            // `{:#}` (not `to_string()`): anyhow's Display shows only the
+            // outermost context, which would drop the bridge's searched-paths
+            // report and leave the UI with a bare "initializing Roslyn
+            // bridge". The alternate format keeps the full cause chain so the
+            // failure names every location checked.
+            .map_err(|e| AppError::Analysis(format!("{e:#}")))?;
         let loaded = LoadedGraph {
             project_id: project_id.to_owned(),
             source_path: path.to_path_buf(),

@@ -44,7 +44,20 @@ TARGET_PLATFORMS = {
 }
 
 # Updater archive suffix preference per platform (first match wins).
-ARCHIVE_SUFFIXES = (".nsis.zip", ".msi.zip", ".app.tar.gz", ".AppImage.tar.gz")
+# Tauri v2 with `createUpdaterArtifacts: true` signs the installers directly:
+# Windows NSIS `*-setup.exe` (+ `.sig`), WiX `*.msi` (+ `.sig`), macOS
+# `*.app.tar.gz` (+ `.sig`). The legacy `*.nsis.zip` / `*.msi.zip` layout is
+# only emitted with `createUpdaterArtifacts: "v1Compatible"` (deprecated,
+# removed in v3) — still accepted as fallback. Prefer NSIS over MSI, and v2
+# native artifacts over legacy zips.
+ARCHIVE_SUFFIXES = (
+    "-setup.exe",
+    ".msi",
+    ".nsis.zip",
+    ".msi.zip",
+    ".app.tar.gz",
+    ".AppImage.tar.gz",
+)
 
 
 def split_target(name: str) -> Optional[tuple]:

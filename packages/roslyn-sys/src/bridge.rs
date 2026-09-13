@@ -34,6 +34,8 @@ impl Bridge {
     ///
     /// Uses (in order):
     ///   1. `CODEGRAPH_ROSLYN_BRIDGE` — explicit path to the helper executable
+    ///      (when it points at an existing file; a stale value falls through
+    ///      to the search below instead of failing).
     ///   2. A prebuilt self-contained bundle next to this crate:
     ///      `<repo>/managed/RoslynBridge/bin/Release/net10.0/<rid>/publish/`
     ///      where `<rid>` matches the current OS/arch.
@@ -52,15 +54,23 @@ impl Bridge {
     /// `resource_dir` is the runtime value of Tauri's `app.path().resource_dir()`;
     /// this crate stays Tauri-free by taking it as a plain path. Resolution
     /// order:
-    ///   1. `CODEGRAPH_ROSLYN_BRIDGE` — explicit override, always wins.
-    ///   2. `<resource_dir>/resources/roslyn-bridge/` (installed layout).
+    ///   1. `CODEGRAPH_ROSLYN_BRIDGE` — explicit override, when it points at
+    ///      an existing file. A stale/missing override is *not* fatal: it is
+    ///      recorded in the error report and the search continues below, so a
+    ///      leftover env var on one machine can't brick the installed app.
+    ///   2. `<resource_dir>/resources/roslyn-bridge/` (installed layout;
+    ///      `bundle.resources` preserves the relative structure).
     ///   3. `<resource_dir>/roslyn-bridge/` (alternate flattened layout).
-    ///   4. The same two layouts relative to the running executable's own
-    ///      directory (covers installs where `resource_dir()` misses the
-    ///      bundle root).
-    ///   5. The dev-tree publish directory (same as [`Bridge::init`]).
+    ///   4. `<resource_dir>/RoslynBridge[.exe]` (helper repackaged at the base root).
+    ///   5. The same three layouts relative to the running executable's own
+    ///      directory (`std::env::current_exe`; covers installs where
+    ///      `resource_dir()` misses the bundle root — observed on Windows,
+    ///      where both usually equal the install root).
+    ///   6. The dev-tree publish directory (same as [`Bridge::init`]).
     ///
-    /// A miss returns an error listing every path searched.
+    /// A miss returns an error listing the env override, every path searched,
+    /// and the runtime `resource_dir` / `current_exe` values, so a miss is
+    /// diagnosable from the message alone.
     pub fn init_with_resource_dir(resource_dir: &Path) -> Result<Self> {
         let helper = locate_helper(Some(resource_dir)).context(
             "could not locate a RoslynBridge bundle for this platform; reinstall the app \
@@ -132,14 +142,43 @@ impl Bridge {
 /// listing every location searched (so a miss is diagnosable from the
 /// message alone).
 fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
-    if let Ok(custom) = std::env::var("CODEGRAPH_ROSLYN_BRIDGE") {
-        let p = PathBuf::from(custom);
-        if p.is_file() {
-            return Ok(p);
+    let env_override = std::env::var("CODEGRAPH_ROSLYN_BRIDGE")
+        .ok()
+        .map(PathBuf::from);
+    let current_exe = std::env::current_exe().ok();
+    locate_helper_with(
+        resource_dir,
+        env_override.as_deref(),
+        current_exe.as_deref(),
+        Some(&dev_bundle_path()),
+    )
+}
+
+/// Testable core of [`locate_helper`]: the env override, the running
+/// executable, and the dev-tree fallback are parameters so tests don't touch
+/// process-global state (pass `None`/nonexistent for the fallback to force
+/// the miss branch).
+fn locate_helper_with(
+    resource_dir: Option<&Path>,
+    env_override: Option<&Path>,
+    current_exe: Option<&Path>,
+    dev_fallback: Option<&Path>,
+) -> Result<PathBuf> {
+    let mut notes: Vec<String> = Vec::new();
+
+    // Explicit override wins when it exists, but a stale value must not brick
+    // the app while a perfectly good bundled helper sits next to it: record
+    // the miss and keep searching. (Seen on Windows, where a leftover
+    // CODEGRAPH_ROSLYN_BRIDGE from an earlier troubleshooting session made
+    // every launch fail at init even though the installer bundles the
+    // helper.)
+    if let Some(custom) = env_override {
+        if custom.is_file() {
+            return Ok(custom.to_path_buf());
         }
-        return Err(anyhow!(
-            "CODEGRAPH_ROSLYN_BRIDGE set but not a file: {}",
-            p.display()
+        notes.push(format!(
+            "CODEGRAPH_ROSLYN_BRIDGE={} is not a file; continuing search",
+            custom.display()
         ));
     }
 
@@ -153,7 +192,7 @@ fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
     if let Some(dir) = resource_dir {
         bases.push(dir.to_path_buf());
     }
-    if let Ok(exe) = std::env::current_exe() {
+    if let Some(exe) = current_exe {
         if let Some(dir) = exe.parent() {
             if !bases.iter().any(|b| b == dir) {
                 bases.push(dir.to_path_buf());
@@ -172,12 +211,27 @@ fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
         }
     }
 
-    let executable = dev_bundle_path();
-    if executable.is_file() {
-        return Ok(executable);
+    if let Some(executable) = dev_fallback {
+        if executable.is_file() {
+            return Ok(executable.to_path_buf());
+        }
     }
 
     let mut report = format!("no RoslynBridge bundle for {}", current_rid());
+    report.push_str(&format!(
+        " (resource_dir={}; current_exe={})",
+        resource_dir
+            .map(|d| d.display().to_string())
+            .as_deref()
+            .unwrap_or("<unavailable>"),
+        current_exe
+            .map(|e| e.display().to_string())
+            .as_deref()
+            .unwrap_or("<unavailable>"),
+    ));
+    for note in &notes {
+        report.push_str(&format!("\n  note: {note}"));
+    }
     if searched.is_empty() {
         report.push_str("; no resource/executable directories available to search");
     } else {
@@ -188,7 +242,10 @@ fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
     }
     report.push_str(&format!(
         "\n  (dev fallback: {})",
-        executable.display()
+        dev_fallback
+            .map(|d| d.display().to_string())
+            .as_deref()
+            .unwrap_or("<disabled>")
     ));
     Err(anyhow!(report))
 }
@@ -197,9 +254,10 @@ fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
 ///
 /// Tauri copies `bundle.resources` entries preserving their relative
 /// structure, so `resources/roslyn-bridge/` in `src-tauri` lands at
-/// `<resource_dir>/resources/roslyn-bridge/`. The flattened variant is
-/// probed too so a future repackaging doesn't silently break analysis.
-fn bundled_candidates(resource_dir: &Path) -> [PathBuf; 2] {
+/// `<resource_dir>/resources/roslyn-bridge/`. The flattened and root-level
+/// variants are probed too so a future repackaging doesn't silently break
+/// analysis.
+fn bundled_candidates(resource_dir: &Path) -> [PathBuf; 3] {
     let exe = format!("RoslynBridge{}", std::env::consts::EXE_SUFFIX);
     [
         resource_dir
@@ -207,6 +265,7 @@ fn bundled_candidates(resource_dir: &Path) -> [PathBuf; 2] {
             .join("roslyn-bridge")
             .join(&exe),
         resource_dir.join("roslyn-bridge").join(&exe),
+        resource_dir.join(&exe),
     ]
 }
 
@@ -332,6 +391,91 @@ mod tests {
         let bridge =
             Bridge::init_with_resource_dir(&resource_dir).expect("resolve flattened helper");
         assert_eq!(bridge.helper_path(), helper);
+        std::fs::remove_dir_all(&resource_dir).ok();
+    }
+
+    #[test]
+    fn root_level_helper_is_found() {
+        // Repackaged installs may stage the helper at the base root.
+        let base = unique_dir("root-level");
+        let helper = base.join(exe_name());
+        touch(&helper);
+
+        let resolved =
+            locate_helper_with(Some(&base), None, None, None).expect("resolve root-level helper");
+        assert_eq!(resolved, helper);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn stale_env_override_falls_back_to_bundled() {
+        // A leftover CODEGRAPH_ROSLYN_BRIDGE pointing nowhere must not brick
+        // the app while a bundled helper exists (the Windows init failure).
+        let resource_dir = unique_dir("stale-env");
+        let helper = resource_dir
+            .join("resources")
+            .join("roslyn-bridge")
+            .join(exe_name());
+        touch(&helper);
+        let stale = resource_dir.join("gone").join(exe_name());
+
+        let resolved = locate_helper_with(Some(&resource_dir), Some(&stale), None, None)
+            .expect("stale override falls back to bundled helper");
+        assert_eq!(resolved, helper);
+        std::fs::remove_dir_all(&resource_dir).ok();
+    }
+
+    #[test]
+    fn valid_env_override_still_wins() {
+        let dir = unique_dir("env-wins");
+        let from_env = dir.join(format!("custom-{}", exe_name()));
+        let from_bundle = dir.join("resources").join("roslyn-bridge").join(exe_name());
+        touch(&from_env);
+        touch(&from_bundle);
+
+        let resolved = locate_helper_with(Some(&dir), Some(&from_env), None, None)
+            .expect("valid override wins");
+        assert_eq!(resolved, from_env);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn miss_error_names_override_bases_and_candidates() {
+        let resource_dir = unique_dir("miss");
+        let stale = resource_dir.join("stale").join(exe_name());
+        let fake_exe = resource_dir.join("bin").join("app.exe");
+
+        let missing_dev = resource_dir.join("dev-fallback").join("RoslynBridge");
+        let err = locate_helper_with(Some(&resource_dir), Some(&stale), Some(&fake_exe), Some(&missing_dev))
+            .expect_err("should fail with nothing staged");
+        let message = format!("{err:#}");
+        // The stale override is recorded, not silently ignored…
+        assert!(
+            message.contains("CODEGRAPH_ROSLYN_BRIDGE"),
+            "missing env note: {message}"
+        );
+        assert!(
+            message.contains(&stale.display().to_string()),
+            "missing stale path: {message}"
+        );
+        // …and the report names the runtime bases plus every candidate, so
+        // the next failure is diagnosable from the popup alone.
+        assert!(
+            message.contains(&resource_dir.display().to_string()),
+            "missing resource_dir: {message}"
+        );
+        assert!(
+            message.contains(&fake_exe.display().to_string()),
+            "missing current_exe: {message}"
+        );
+        assert!(
+            message.contains("resources"),
+            "missing searched candidates: {message}"
+        );
+        assert!(
+            message.contains(&missing_dev.display().to_string()),
+            "missing dev fallback: {message}"
+        );
         std::fs::remove_dir_all(&resource_dir).ok();
     }
 
