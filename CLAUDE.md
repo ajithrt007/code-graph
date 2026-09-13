@@ -310,3 +310,12 @@ npm --prefix apps/desktop run tauri:build  # release bundle
 
 The `dto.rs` tests use `Bridge::from_json` fixtures and do **not** require
 dotnet, so `cargo test` on roslyn-sys is safe anywhere.
+
+## 12. Auto-updates
+
+Tauri updater plugin + GitHub Releases (`ajithrt007/code-graph`), Windows
+x64 + macOS x64 only. Full runbook: [docs/updater.md](./docs/updater.md).
+Rules: app version (`tauri.conf.json` + `src-tauri/Cargo.toml` +
+`apps/desktop/package.json`, all equal) MUST match the release tag;
+`TAURI_SIGNING_PRIVATE_KEY` comes from GitHub secrets (never committed);
+`tauri.conf.json` `plugins.updater.pubkey` holds the public key.

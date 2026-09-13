@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ProjectSummary } from "../domain/method";
 import type { OpenLogLine } from "../workspace/useWorkspace";
+import { UpdateSection } from "./UpdateSection";
 
 export interface OpenProgress {
   current: number;
@@ -76,6 +77,7 @@ export function ProjectsScreen({
         <button disabled={!path.trim() || opening}>
           {opening ? "Opening…" : "Open project"}
         </button>
+        <UpdateSection />
         {showTerminal && (
           <div className="load-terminal" role="status" aria-label="Project loading log">
             <div className="load-terminal__header">

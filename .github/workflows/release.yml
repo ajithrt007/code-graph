@@ -83,9 +83,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/desktop
+      - name: Require updater signing key
+        shell: bash
+        # Tests emptiness only — the secret value is never printed.
+        run: |
+          [[ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]] \
+            || { echo "missing TAURI_SIGNING_PRIVATE_KEY secret (see docs/updater.md)" >&2; exit 1; }
       - name: Build Tauri application
         shell: bash
         working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [[ "${{ matrix.rid }}" == linux-* ]]; then
             # Skip AppImage (linuxdeploy) on Linux; ship deb+rpm only.
@@ -108,9 +117,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Verify tag matches app version
+        shell: bash
+        # The updater compares latest.json against the installed app version;
+        # a mismatch would make every install update-loop forever.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf="$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")"
+          [[ "$tag" == "$conf" ]] \
+            || { echo "tag $GITHUB_REF_NAME != tauri.conf.json version $conf; bump the app version first (see docs/updater.md)" >&2; exit 1; }
       - name: Stage release assets
         shell: bash
         run: |
@@ -121,7 +140,8 @@ jobs:
             find "$dir" -type f \
               \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.tar.gz' \
                  -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
-                 -o -name '*.msi' -o -name '*.exe' \) \
+                 -o -name '*.msi' -o -name '*.exe' \
+                 -o -name '*.zip' -o -name '*.sig' \) \
               -print0 | while IFS= read -r -d '' f; do
                   cp "$f" "assets/${name}-$(basename "$f")"
                 done
@@ -138,3 +158,21 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --generate-notes
+      - name: Generate and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          body_file="$(mktemp)"
+          gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --json body -q .body > "$body_file"
+          python3 scripts/generate-latest-json.py \
+            --assets-dir assets \
+            --tag "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --config apps/desktop/src-tauri/tauri.conf.json \
+            --notes-file "$body_file" \
+            --out assets/latest.json
+          cat assets/latest.json
+          gh release upload "$GITHUB_REF_NAME" assets/latest.json \
+            --repo "$GITHUB_REPOSITORY" --clobber

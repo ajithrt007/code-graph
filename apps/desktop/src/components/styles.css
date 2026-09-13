@@ -318,6 +318,94 @@ button {
     color: var(--fg-muted);
 }
 
+.update-section {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+}
+
+.update-section__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.update-section__version {
+    color: var(--fg-muted);
+}
+
+.project-add .update-section__button {
+    width: auto;
+    margin: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: #e7e7e7;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.project-add .update-section__button:hover:not(:disabled) {
+    background: var(--panel-hover);
+}
+
+.project-add .update-section__button:disabled {
+    opacity: .5;
+    cursor: default;
+}
+
+.project-add .update-section__button--primary {
+    border: 0;
+    background: #0e639c;
+    color: white;
+    margin-top: 8px;
+}
+
+.update-section__note {
+    margin: 8px 0 0;
+    color: var(--fg-muted);
+}
+
+.update-section__error {
+    margin: 8px 0 0;
+    color: #f14c4c;
+    word-break: break-word;
+}
+
+.update-section__available p {
+    margin: 8px 0 0;
+    color: #e7e7e7;
+}
+
+.update-section__notes {
+    margin-top: 8px;
+    color: var(--fg-muted);
+}
+
+.update-section__notes summary {
+    cursor: pointer;
+}
+
+.update-section__notes pre {
+    max-height: 160px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    background: #1e1e1e;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    user-select: text;
+}
+
+.update-section__download p {
+    margin: 8px 0;
+}
+
 .empty-state {
     color: var(--fg-muted);
 }
