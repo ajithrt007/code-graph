@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { orderedClasses } from "../graph/adapter";
-import type { MethodGraph } from "../domain/method";
+import type { MethodGraph, MethodNode } from "../domain/method";
+
+/**
+ * Short label for a method row: `display_name` is "{Type}.{Name}({params})"
+ * but the class header already shows the type, so drop that first segment.
+ * The parameter list is kept so overloads stay distinguishable.
+ */
+function shortMethodLabel(method: MethodNode): string {
+  const dot = method.display_name.indexOf(".");
+  return dot >= 0 ? method.display_name.slice(dot + 1) : method.display_name;
+}
 
 export function ClassExplorer({
   graph,
@@ -68,10 +78,11 @@ export function ClassExplorer({
                 cls.methods.map((method) => (
                   <button
                     key={method.id}
+                    title={method.display_name}
                     className={`class-tree__method ${selectedId === method.id ? "class-tree__method--selected" : ""}`}
                     onClick={() => onSelect(method.id)}
                   >
-                    {method.display_name}
+                    {shortMethodLabel(method)}
                   </button>
                 ))}
             </div>

@@ -34,6 +34,31 @@ interface LoadProgressEvent {
 }
 
 const MAX_LOG_LINES = 200;
+
+/** Last selected/focused method per project, restored on subsequent loads. */
+const LAST_SELECTED_PREFIX = "codegraph:lastSelected:";
+const readLastSelected = (projectId: string): string | null => {
+  try {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(LAST_SELECTED_PREFIX + projectId);
+  } catch {
+    return null;
+  }
+};
+const writeLastSelected = (projectId: string, methodId: string): void => {
+  try {
+    window.localStorage.setItem(LAST_SELECTED_PREFIX + projectId, methodId);
+  } catch {
+    // Storage unavailable (private mode, tests) — viewport restore skips.
+  }
+};
+const clearLastSelected = (projectId: string): void => {
+  try {
+    window.localStorage.removeItem(LAST_SELECTED_PREFIX + projectId);
+  } catch {
+    // Ignore.
+  }
+};
 const message = (value: unknown): string => {
   if (value instanceof Error) return value.message;
   if (typeof value === "string") return value;
@@ -124,6 +149,9 @@ export function useWorkspace() {
   }, []);
 
   const addLoaded = useCallback((loaded: LoadedGraph) => {
+    const stored = readLastSelected(loaded.project_id);
+    const restoredId =
+      stored && loaded.graph.methods[stored] ? stored : null;
     setTabs((current) => {
       const title =
         loaded.source_path
@@ -137,7 +165,7 @@ export function useWorkspace() {
             id: loaded.project_id,
             title,
             loaded,
-            selectedId: null,
+            selectedId: restoredId,
             source: null,
             rightOpen: true,
             loading: false,
@@ -148,6 +176,21 @@ export function useWorkspace() {
         : [...current, next];
     });
     setActiveTab(loaded.project_id);
+    if (restoredId) {
+      void tauri
+        .getMethodSource(loaded.project_id, restoredId)
+        .then((source) => {
+          setTabs((current) =>
+            current.map((tab) =>
+              tab.id === loaded.project_id &&
+              tab.selectedId === restoredId
+                ? { ...tab, source }
+                : tab,
+            ),
+          );
+        })
+        .catch(() => undefined);
+    }
   }, []);
 
   const openPath = useCallback(
@@ -194,6 +237,7 @@ export function useWorkspace() {
       try {
         await tauri.deleteProject(projectId);
         closeTab(projectId);
+        clearLastSelected(projectId);
         await reloadProjects();
       } catch (error) {
         window.alert(`Could not delete project: ${message(error)}`);
@@ -203,6 +247,7 @@ export function useWorkspace() {
   );
   const select = useCallback(
     async (projectId: string, methodId: string | null) => {
+      if (methodId) writeLastSelected(projectId, methodId);
       setTabs((current) =>
         current.map((tab) =>
           tab.id === projectId

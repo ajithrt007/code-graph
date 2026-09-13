@@ -9,10 +9,53 @@
     --accent-caller: #d7ba7d;
     --accent-callee: #4ec9b0;
     --border: #3c3c3c;
+    --scrollbar-thumb: rgba(255, 255, 255, .14);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, .28);
+    --scrollbar-thumb-active: rgba(255, 255, 255, .4);
 }
 
 * {
     box-sizing: border-box;
+}
+
+/*
+ * VS Code-style scrollbars everywhere, so macOS, Windows, and Linux share
+ * one look instead of each showing its native OS scrollbar. Thin floating
+ * thumb over a transparent track; subtle at rest, stronger on hover/drag.
+ * - Chromium/WebView2/WKWebView/WebKitGTK via ::-webkit-scrollbar.
+ * - Firefox via scrollbar-width/scrollbar-color.
+ */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: 3px solid transparent;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: content-box;
+    border: 3px solid transparent;
+}
+
+*::-webkit-scrollbar-thumb:active {
+    background: var(--scrollbar-thumb-active);
+    background-clip: content-box;
+    border: 3px solid transparent;
 }
 
 html,

@@ -2,7 +2,7 @@
 // interaction events. Knows nothing about the Tauri backend or domain
 // graph types directly — it receives everything via props.
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -16,6 +16,7 @@ import {
   applySelection,
   toReactFlowEdges,
   toReactFlowNodes,
+  topLeftMostNodeId,
   type RFCallEdge,
   type RFMethodNode,
 } from "../graph/adapter";
@@ -25,6 +26,7 @@ import { MethodNode } from "./MethodNode";
 const nodeTypes = { method: MethodNode };
 
 interface GraphViewProps {
+  projectId: string;
   graph: MethodGraph;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
@@ -33,6 +35,7 @@ interface GraphViewProps {
 }
 
 export function GraphView({
+  projectId,
   graph,
   selectedId,
   onSelect,
@@ -58,17 +61,64 @@ export function GraphView({
   );
   const handlePaneClick = useCallback(() => onSelect(null), [onSelect]);
 
-  const instanceRef = useRef<ReactFlowInstance | null>(null);
-  useEffect(() => {
-    if (focusRequest) {
-      instanceRef.current?.fitView({
-        nodes: [{ id: focusRequest.id }],
+  const [instance, setInstance] = useState<ReactFlowInstance | null>(null);
+  // Projects whose initial viewport was already placed. First load centers
+  // the top-left-most node; later arrivals center the selection instead.
+  const placedRef = useRef<Set<string>>(new Set());
+  // Last node the viewport was centered on. Guards the selection/focus
+  // effects so one selection triggers exactly one camera move, and lets a
+  // re-select of the same node (fresh nonce) refocus after panning away.
+  const lastCenteredRef = useRef<string | null>(null);
+  const nodeIdsRef = useRef<Set<string>>(new Set());
+  nodeIdsRef.current = new Set(baseNodes.map((n) => n.id));
+
+  // Pan the viewport so the node's center is the viewport's center.
+  // Uses the measured card size (falls back to the CSS minimums before
+  // the first measurement) and preserves the current zoom: focusing is a
+  // pure pan, never a zoom jump.
+  const focusNode = useCallback(
+    (id: string) => {
+      if (!instance || !nodeIdsRef.current.has(id)) return;
+      const internal = instance.getNode(id);
+      const width = internal?.width ?? 180;
+      const height = internal?.height ?? 60;
+      const base =
+        internal?.positionAbsolute ?? internal?.position ?? { x: 0, y: 0 };
+      void instance.setCenter(base.x + width / 2, base.y + height / 2, {
+        zoom: instance.getZoom(),
         duration: 300,
-        padding: 0.25,
-        maxZoom: 1.5,
       });
+      lastCenteredRef.current = id;
+    },
+    [instance],
+  );
+
+  // First sight of a project: top-left-most node, unless a selection was
+  // restored (handled by the selection effect below).
+  useEffect(() => {
+    if (!instance || baseNodes.length === 0) return;
+    if (placedRef.current.has(projectId)) return;
+    placedRef.current.add(projectId);
+    if (!selectedId || !nodeIdsRef.current.has(selectedId)) {
+      const top = topLeftMostNodeId(baseNodes);
+      if (top) focusNode(top);
     }
-  }, [focusRequest]);
+  }, [instance, baseNodes, projectId, selectedId, focusNode]);
+
+  // Every selection — explorer, graph node, search, tab switch, restore —
+  // brings its node to the center. Deselecting resets so re-selecting the
+  // same node after panning away refocuses it.
+  useEffect(() => {
+    if (!selectedId) {
+      lastCenteredRef.current = null;
+      return;
+    }
+    if (selectedId !== lastCenteredRef.current) focusNode(selectedId);
+  }, [selectedId, focusNode]);
+
+  useEffect(() => {
+    if (focusRequest) focusNode(focusRequest.id);
+  }, [focusRequest, focusNode]);
 
   return (
     <div className="graph-view">
@@ -76,12 +126,10 @@ export function GraphView({
         nodes={nodes as Node[]}
         edges={edges as Edge[]}
         nodeTypes={nodeTypes}
-        fitView
-        onInit={(instance) => {
-          instanceRef.current = instance;
-        }}
+        onInit={setInstance}
         onNodeClick={handleNodeClick}
         onPaneClick={handlePaneClick}
+        minZoom={0.1}
         proOptions={{ hideAttribution: true }}
       >
         <Background />

@@ -75,4 +75,31 @@ export const graphOps = {
       .map((e) => graph.methods[e.target])
       .filter(Boolean);
   },
+  /**
+   * All transitive callers of `targetId` (recursive impact chain toward the
+   * left-most entry points). Cycle-safe BFS over reversed edges; the
+   * selected node itself is never included even when reachable via a cycle.
+   */
+  ancestorsOf(graph: MethodGraph, targetId: string): MethodNode[] {
+    const byTarget = new Map<string, string[]>();
+    for (const e of graph.edges) {
+      const list = byTarget.get(e.target);
+      if (list) list.push(e.source);
+      else byTarget.set(e.target, [e.source]);
+    }
+    const seen = new Set<string>([targetId]);
+    const queue: string[] = [...(byTarget.get(targetId) ?? [])];
+    const result: MethodNode[] = [];
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const node = graph.methods[id];
+      if (node) result.push(node);
+      for (const parent of byTarget.get(id) ?? []) {
+        if (!seen.has(parent)) queue.push(parent);
+      }
+    }
+    return result;
+  },
 };
