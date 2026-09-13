@@ -55,7 +55,12 @@ impl Bridge {
     ///   1. `CODEGRAPH_ROSLYN_BRIDGE` — explicit override, always wins.
     ///   2. `<resource_dir>/resources/roslyn-bridge/` (installed layout).
     ///   3. `<resource_dir>/roslyn-bridge/` (alternate flattened layout).
-    ///   4. The dev-tree publish directory (same as [`Bridge::init`]).
+    ///   4. The same two layouts relative to the running executable's own
+    ///      directory (covers installs where `resource_dir()` misses the
+    ///      bundle root).
+    ///   5. The dev-tree publish directory (same as [`Bridge::init`]).
+    ///
+    /// A miss returns an error listing every path searched.
     pub fn init_with_resource_dir(resource_dir: &Path) -> Result<Self> {
         let helper = locate_helper(Some(resource_dir)).context(
             "could not locate a RoslynBridge bundle for this platform; reinstall the app \
@@ -123,7 +128,9 @@ impl Bridge {
     }
 }
 
-/// Absolute path to a self-contained RoslynBridge executable, or an error.
+/// Absolute path to a self-contained RoslynBridge executable, or an error
+/// listing every location searched (so a miss is diagnosable from the
+/// message alone).
 fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
     if let Ok(custom) = std::env::var("CODEGRAPH_ROSLYN_BRIDGE") {
         let p = PathBuf::from(custom);
@@ -136,12 +143,32 @@ fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
         ));
     }
 
+    // Candidate base dirs: Tauri's resource dir first, then the running
+    // executable's own directory. The latter covers installs where
+    // `resource_dir()` doesn't point at the bundle root (observed on
+    // Windows: the helper sits at
+    // `<install>/resources/roslyn-bridge/RoslynBridge.exe` next to the
+    // running exe, yet resource-dir resolution missed it).
+    let mut bases: Vec<PathBuf> = Vec::new();
     if let Some(dir) = resource_dir {
-        for candidate in bundled_candidates(dir) {
+        bases.push(dir.to_path_buf());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if !bases.iter().any(|b| b == dir) {
+                bases.push(dir.to_path_buf());
+            }
+        }
+    }
+
+    let mut searched = Vec::new();
+    for base in &bases {
+        for candidate in bundled_candidates(base) {
             if candidate.is_file() {
                 ensure_executable(&candidate);
                 return Ok(candidate);
             }
+            searched.push(candidate);
         }
     }
 
@@ -150,11 +177,20 @@ fn locate_helper(resource_dir: Option<&Path>) -> Result<PathBuf> {
         return Ok(executable);
     }
 
-    Err(anyhow!(
-        "no RoslynBridge bundle for {} at {}",
-        current_rid(),
+    let mut report = format!("no RoslynBridge bundle for {}", current_rid());
+    if searched.is_empty() {
+        report.push_str("; no resource/executable directories available to search");
+    } else {
+        report.push_str("; searched:");
+        for path in &searched {
+            report.push_str(&format!("\n  - {}", path.display()));
+        }
+    }
+    report.push_str(&format!(
+        "\n  (dev fallback: {})",
         executable.display()
-    ))
+    ));
+    Err(anyhow!(report))
 }
 
 /// Candidate locations inside an installed app's resource directory.

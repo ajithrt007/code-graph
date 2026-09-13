@@ -11,7 +11,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::analysis::CSharpAnalyzer;
+use crate::analysis::{CSharpAnalyzer, LoadProgress};
 use crate::domain::{MethodGraph, MethodId, MethodNode};
 
 use super::errors::{AppError, AppResult};
@@ -126,7 +126,10 @@ impl GraphService {
             .canonicalize()
             .map_err(|e| AppError::Analysis(format!("cannot open {}: {e}", path.display())))?;
         let project = self.upsert_project(&canonical)?;
-        let loaded = self.analyze_project(&project.id, &canonical)?;
+        let emit = |event: LoadProgress| {
+            let _ = app.emit("project-load-progress", event);
+        };
+        let loaded = self.analyze_project(&project.id, &canonical, &emit)?;
         self.install_watcher(&project, app)?;
         Ok(loaded)
     }
@@ -147,14 +150,30 @@ impl GraphService {
                 project.path.display().to_string(),
             ));
         }
-        let loaded = self.analyze_project(&project.id, &project.path)?;
+        let emit = |event: LoadProgress| {
+            let _ = app.emit("project-load-progress", event);
+        };
+        let loaded = self.analyze_project(&project.id, &project.path, &emit)?;
         self.install_watcher(&project, app)?;
         Ok(loaded)
     }
 
     pub fn refresh_project(&self, project_id: &str) -> AppResult<LoadedGraph> {
         let project = self.project_by_id(project_id)?;
-        self.analyze_project(&project.id, &project.path)
+        self.analyze_project(&project.id, &project.path, &|_| {})
+    }
+
+    pub fn delete_project(&self, project_id: &str) -> AppResult<()> {
+        self.close_project(project_id);
+        let database = self.database.lock().expect("database poisoned");
+        let connection = database.as_ref().ok_or(AppError::NotInitialized)?;
+        let removed = connection
+            .execute("DELETE FROM projects WHERE id = ?1", params![project_id])
+            .map_err(|e| AppError::Persistence(e.to_string()))?;
+        if removed == 0 {
+            return Err(AppError::ProjectNotFound(project_id.to_owned()));
+        }
+        Ok(())
     }
 
     pub fn close_project(&self, project_id: &str) {
@@ -277,7 +296,12 @@ impl GraphService {
             .ok_or_else(|| AppError::ProjectNotOpen(project_id.to_owned()))
     }
 
-    fn analyze_project(&self, project_id: &str, path: &Path) -> AppResult<LoadedGraph> {
+    fn analyze_project(
+        &self,
+        project_id: &str,
+        path: &Path,
+        progress: &dyn Fn(LoadProgress),
+    ) -> AppResult<LoadedGraph> {
         let analyzer = match self
             .resource_dir
             .lock()
@@ -288,7 +312,7 @@ impl GraphService {
             None => CSharpAnalyzer::new(),
         };
         let graph = analyzer
-            .analyze_path(path)
+            .analyze_path(path, progress)
             .map_err(|e| AppError::Analysis(e.to_string()))?;
         let loaded = LoadedGraph {
             project_id: project_id.to_owned(),

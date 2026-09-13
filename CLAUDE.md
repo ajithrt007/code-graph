@@ -104,7 +104,7 @@ Rules that must not be broken:
   are cosmetic.
 - Commands are query-oriented and independent of React Flow shapes:
   `list_projects`, `open_project`, `load_project`, `refresh_project`,
-  `close_project`, `get_method`, `get_callers`, `get_callees`,
+  `close_project`, `delete_project`, `get_method`, `get_callers`, `get_callees`,
   `get_method_source`, `save_method_source`, `search_methods`.
 
 ### Data flow (one full analysis)
@@ -197,7 +197,13 @@ strings — the domain never parses them.
    installer-embedded copy; `bundle.resources` in `tauri.conf.json`
    preserves the `resources/roslyn-bridge/` relative structure), else
 3. `<resource_dir>/roslyn-bridge/RoslynBridge[.exe]` (flattened fallback), else
-4. the dev-tree publish dir below.
+4. the same two layouts relative to the running executable's own directory
+   (`std::env::current_exe`; covers installs where `resource_dir()`
+   doesn't point at the bundle root — observed on Windows), else
+5. the dev-tree publish dir below.
+
+   A miss returns an error listing every path searched, so the popup names
+   the exact locations checked.
 
 `Bridge::init()` (dev/tests): steps 1 and 4 only.
 
@@ -304,3 +310,12 @@ npm --prefix apps/desktop run tauri:build  # release bundle
 
 The `dto.rs` tests use `Bridge::from_json` fixtures and do **not** require
 dotnet, so `cargo test` on roslyn-sys is safe anywhere.
+
+## 12. Auto-updates
+
+Tauri updater plugin + GitHub Releases (`ajithrt007/code-graph`), Windows
+x64 + macOS x64 only. Full runbook: [docs/updater.md](./docs/updater.md).
+Rules: app version (`tauri.conf.json` + `src-tauri/Cargo.toml` +
+`apps/desktop/package.json`, all equal) MUST match the release tag;
+`TAURI_SIGNING_PRIVATE_KEY` comes from GitHub secrets (never committed);
+`tauri.conf.json` `plugins.updater.pubkey` holds the public key.

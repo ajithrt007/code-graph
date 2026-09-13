@@ -17,6 +17,23 @@ export interface ProjectTab {
   loading: boolean;
   error: string | null;
 }
+
+/** One line in the project-loading terminal. */
+export interface OpenLogLine {
+  time: string;
+  text: string;
+}
+
+/** Backend `project-load-progress` event payload. */
+interface LoadProgressEvent {
+  target: string;
+  stage: string;
+  detail: string;
+  current: number;
+  total: number;
+}
+
+const MAX_LOG_LINES = 200;
 const message = (value: unknown): string => {
   if (value instanceof Error) return value.message;
   if (typeof value === "string") return value;
@@ -39,6 +56,15 @@ export function useWorkspace() {
   const [tabs, setTabs] = useState<ProjectTab[]>([]);
   const [activeTab, setActiveTab] = useState<string>("projects");
   const [opening, setOpening] = useState(false);
+  // Mini-terminal log fed by backend `project-load-progress` events.
+  const [openLog, setOpenLog] = useState<OpenLogLine[]>([]);
+  const [openProgress, setOpenProgress] = useState<{
+    current: number;
+    total: number;
+    stage: string;
+  } | null>(null);
+  const [openFailed, setOpenFailed] = useState(false);
+  const openingRef = useRef(false);
   const timers = useRef(new Map<string, number>());
   const reloadProjects = useCallback(
     () =>
@@ -51,6 +77,51 @@ export function useWorkspace() {
   useEffect(() => {
     void reloadProjects();
   }, [reloadProjects]);
+
+  const appendLog = useCallback((text: string) => {
+    const line: OpenLogLine = {
+      time: new Date().toLocaleTimeString(),
+      text,
+    };
+    setOpenLog((current) => [...current.slice(-(MAX_LOG_LINES - 1)), line]);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<LoadProgressEvent>("project-load-progress", (event) => {
+      if (!openingRef.current) return;
+      appendLog(event.payload.detail);
+      setOpenProgress({
+        current: event.payload.current,
+        total: event.payload.total,
+        stage: event.payload.stage,
+      });
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [appendLog]);
+
+  const beginOpen = useCallback(() => {
+    setOpenLog([]);
+    setOpenProgress(null);
+    setOpenFailed(false);
+    setOpening(true);
+    openingRef.current = true;
+  }, []);
+
+  const endOpen = useCallback(() => {
+    setOpening(false);
+    openingRef.current = false;
+  }, []);
+
+  const dismissOpenLog = useCallback(() => {
+    setOpenLog([]);
+    setOpenProgress(null);
+    setOpenFailed(false);
+  }, []);
 
   const addLoaded = useCallback((loaded: LoadedGraph) => {
     setTabs((current) => {
@@ -81,37 +152,55 @@ export function useWorkspace() {
 
   const openPath = useCallback(
     async (path: string) => {
-      setOpening(true);
+      beginOpen();
       try {
         addLoaded(await tauri.openProject(path));
         await reloadProjects();
       } catch (error) {
-        window.alert(`Could not open project: ${message(error)}`);
+        const text = message(error);
+        appendLog(`Failed: ${text}`);
+        setOpenFailed(true);
+        window.alert(`Could not open project: ${text}`);
       } finally {
-        setOpening(false);
+        endOpen();
       }
     },
-    [addLoaded, reloadProjects],
+    [addLoaded, appendLog, beginOpen, endOpen, reloadProjects],
   );
   const openRecent = useCallback(
     async (projectId: string) => {
-      setOpening(true);
+      beginOpen();
       try {
         addLoaded(await tauri.loadProject(projectId));
         await reloadProjects();
       } catch (error) {
-        window.alert(`Could not open project: ${message(error)}`);
+        const text = message(error);
+        appendLog(`Failed: ${text}`);
+        setOpenFailed(true);
+        window.alert(`Could not open project: ${text}`);
       } finally {
-        setOpening(false);
+        endOpen();
       }
     },
-    [addLoaded, reloadProjects],
+    [addLoaded, appendLog, beginOpen, endOpen, reloadProjects],
   );
   const closeTab = useCallback((projectId: string) => {
     setTabs((current) => current.filter((tab) => tab.id !== projectId));
     setActiveTab((current) => (current === projectId ? "projects" : current));
     void tauri.closeProject(projectId);
   }, []);
+  const deleteProject = useCallback(
+    async (projectId: string) => {
+      try {
+        await tauri.deleteProject(projectId);
+        closeTab(projectId);
+        await reloadProjects();
+      } catch (error) {
+        window.alert(`Could not delete project: ${message(error)}`);
+      }
+    },
+    [closeTab, reloadProjects],
+  );
   const select = useCallback(
     async (projectId: string, methodId: string | null) => {
       setTabs((current) =>
@@ -226,10 +315,15 @@ export function useWorkspace() {
     tabs,
     activeTab,
     opening,
+    openLog,
+    openProgress,
+    openFailed,
     setActiveTab,
     openPath,
     openRecent,
     closeTab,
+    deleteProject,
+    dismissOpenLog,
     select,
     toggleEditor,
     saveSource,

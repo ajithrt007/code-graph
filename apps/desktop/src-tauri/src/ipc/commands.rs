@@ -65,6 +65,13 @@ pub fn close_project(args: ProjectArgs, state: State<'_, AppState>) {
     state.graph.close_project(&args.project_id)
 }
 #[tauri::command]
+pub fn delete_project(
+    args: ProjectArgs,
+    state: State<'_, AppState>,
+) -> Result<(), crate::app::AppError> {
+    state.graph.delete_project(&args.project_id)
+}
+#[tauri::command]
 pub fn get_method(
     args: ProjectMethodArgs,
     state: State<'_, AppState>,
