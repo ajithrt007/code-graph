@@ -5,7 +5,7 @@
 // helpers exported here so the boundary stays clean.
 
 import type { CSSProperties } from "react";
-import { graphOps } from "../domain/method";
+import { compareMethodOrder, graphOps } from "../domain/method";
 import type { Edge, Node } from "reactflow";
 import type { MethodGraph, MethodNode } from "../domain/method";
 
@@ -39,12 +39,11 @@ const EDGE_STYLE: Record<NodeRole, CSSProperties> = {
   callee: { stroke: "var(--accent-callee)", strokeWidth: 2, opacity: 1 },
 };
 
-// Tree layout constants: horizontal = call depth (entry points left,
-// downstream/external dependencies right), vertical = alphabetical order
-// within a level. Spacing sized so node cards (~160px wide, ~60px tall)
-// never overlap.
-const TREE_H_SPACING = 340;
-const TREE_V_SPACING = 120;
+// Gaps between adjacent columns/rows. These are pure spacing — column
+// offsets and row stacking below are derived from each node's own
+// width/height, never from a fixed width assumption.
+const TREE_H_GAP = 120;
+const TREE_V_GAP = 60;
 
 /** Opacity applied to nodes/edges outside the selection's impact tree. */
 export const DIMMED_NODE_OPACITY = 0.25;
@@ -153,16 +152,41 @@ function topologicalSort(depGraph: {
 }
 
 function compareMethods(a: MethodNode, b: MethodNode): number {
-  // Alphabetical by method name (`OrderService.GetOrder(int)` sorts under
-  // "GetOrder", not under its class), then display name, then id.
-  const byName = (a.name || a.id).toLowerCase().localeCompare(
-    (b.name || b.id).toLowerCase(),
+  return compareMethodOrder(a, b);
+}
+
+/** Rendered card size of one node, in canvas pixels. */
+export interface NodeSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Pre-measurement size estimate derived from the node's own text content.
+ * Used on first paint before React Flow reports measured card sizes, and
+ * as a fallback for nodes that were never measured. Width grows with the
+ * longest rendered line (type + display name), so short, medium, and very
+ * long method names each reserve proportional space — no fixed width is
+ * ever assumed.
+ */
+export function estimateNodeSize(method: MethodNode): NodeSize {
+  const lines = [
+    method.containing_type ?? "",
+    method.display_name || method.name || method.id,
+  ];
+  const longest = lines.reduce((max, line) => Math.max(max, line.length), 0);
+  // ~7.5px per glyph at the card's 12px font plus horizontal padding.
+  // Floor matches the CSS `min-width: 160px`; ceiling keeps pathological
+  // names from pushing columns off-screen (the card itself wraps).
+  const textWidth = longest * 7.5;
+  const width = Math.min(560, Math.max(160, Math.ceil(textWidth) + 24));
+  // Wrapped text rows for very long names add vertical space as well.
+  const wrappedRows = Math.max(
+    1,
+    Math.ceil(textWidth / Math.max(width - 24, 1)),
   );
-  if (byName !== 0) return byName;
-  const byDisplay = (a.display_name || "")
-    .toLowerCase()
-    .localeCompare((b.display_name || "").toLowerCase());
-  return byDisplay !== 0 ? byDisplay : a.id.localeCompare(b.id);
+  const height = 44 + wrappedRows * 16;
+  return { width, height };
 }
 
 /**
@@ -171,9 +195,18 @@ function compareMethods(a: MethodNode, b: MethodNode): number {
  * dependencies to the right. Nodes sharing a depth are ordered
  * alphabetically by method name. Deliberately ignores containing_type so
  * methods of the same class can spread across levels.
+ *
+ * Positioning is size-aware: each column starts after the widest node of
+ * the previous column plus `TREE_H_GAP`, and nodes stack vertically by
+ * their own heights plus `TREE_V_GAP`. `sizes` carries React Flow's
+ * measured card dimensions (refined after first paint); nodes missing
+ * from it fall back to `estimateNodeSize`, which scales with the node's
+ * own text length. Either way no fixed node width is assumed, so short
+ * and very long method names cannot overlap.
  */
 function computeTreePositions(
   graph: MethodGraph,
+  sizes?: Map<string, NodeSize>,
 ): Map<string, { x: number; y: number }> {
   const methods = Object.values(graph.methods);
   const positions = new Map<string, { x: number; y: number }>();
@@ -238,14 +271,36 @@ function computeTreePositions(
     if (list) list.push(m);
     else levels.set(d, [m]);
   }
-  for (const [d, list] of levels) {
+  const sizeOf = (id: string): NodeSize => {
+    const measured = sizes?.get(id);
+    if (measured && measured.width > 0 && measured.height > 0) {
+      return measured;
+    }
+    const method = graph.methods[id];
+    return method ? estimateNodeSize(method) : { width: 160, height: 60 };
+  };
+  // Column offsets: each depth starts after the widest card of the
+  // previous depth, so a very long name widens its whole column.
+  const orderedDepths = [...levels.keys()].sort((a, b) => a - b);
+  const xOffset = new Map<number, number>();
+  let cursor = 0;
+  for (const d of orderedDepths) {
+    xOffset.set(d, cursor);
+    const widest = Math.max(
+      ...levels.get(d)!.map((m) => sizeOf(m.id).width),
+    );
+    cursor += widest + TREE_H_GAP;
+  }
+  for (const d of orderedDepths) {
+    const list = levels.get(d)!;
     list.sort(compareMethods);
-    list.forEach((method, index) => {
-      positions.set(method.id, {
-        x: d * TREE_H_SPACING,
-        y: index * TREE_V_SPACING,
-      });
-    });
+    // Row stacking: each card starts after the previous card's own
+    // height, so tall (wrapped) cards cannot overlap the next row.
+    let yCursor = 0;
+    for (const method of list) {
+      positions.set(method.id, { x: xOffset.get(d) ?? 0, y: yCursor });
+      yCursor += sizeOf(method.id).height + TREE_V_GAP;
+    }
   }
   return positions;
 }
@@ -276,12 +331,20 @@ export function orderedClasses(graph: MethodGraph): ClassTreeItem[] {
 
 /**
  * Build React Flow nodes from the domain graph using a tree-style layout:
- * - x = call depth (entry points left, downstream dependencies right)
- * - y = alphabetical order of method name within the level
+ * - x = call depth (entry points left, downstream dependencies right),
+ *   offset per column by that column's widest card
+ * - y = alphabetical order of method name within the level, stacked by
+ *   each card's own height
  * Methods of the same class are intentionally NOT pinned to one level.
+ *
+ * Pass React Flow's measured node sizes via `sizes` once available so the
+ * layout refines from text-based estimates to actual rendered dimensions.
  */
-export function toReactFlowNodes(graph: MethodGraph): RFMethodNode[] {
-  const positions = computeTreePositions(graph);
+export function toReactFlowNodes(
+  graph: MethodGraph,
+  sizes?: Map<string, NodeSize>,
+): RFMethodNode[] {
+  const positions = computeTreePositions(graph, sizes);
 
   return Object.values(graph.methods).map((method) => {
     return {

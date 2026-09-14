@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { tauri } from "../api/tauriClient";
+import { graphOps } from "../domain/method";
 import type {
   LoadedGraph,
   MethodSource,
@@ -150,8 +151,13 @@ export function useWorkspace() {
 
   const addLoaded = useCallback((loaded: LoadedGraph) => {
     const stored = readLastSelected(loaded.project_id);
-    const restoredId =
-      stored && loaded.graph.methods[stored] ? stored : null;
+    // Restored focus from the previous visit; on first load (nothing
+    // stored) fall back to the top-most left/root node. Either way the
+    // graph builds around this focus — never the full project graph.
+    const initialId =
+      (stored && loaded.graph.methods[stored] ? stored : null) ??
+      graphOps.defaultFocusId(loaded.graph);
+    if (initialId) writeLastSelected(loaded.project_id, initialId);
     setTabs((current) => {
       const title =
         loaded.source_path
@@ -165,7 +171,7 @@ export function useWorkspace() {
             id: loaded.project_id,
             title,
             loaded,
-            selectedId: restoredId,
+            selectedId: initialId,
             source: null,
             rightOpen: true,
             loading: false,
@@ -176,14 +182,14 @@ export function useWorkspace() {
         : [...current, next];
     });
     setActiveTab(loaded.project_id);
-    if (restoredId) {
+    if (initialId) {
       void tauri
-        .getMethodSource(loaded.project_id, restoredId)
+        .getMethodSource(loaded.project_id, initialId)
         .then((source) => {
           setTabs((current) =>
             current.map((tab) =>
               tab.id === loaded.project_id &&
-              tab.selectedId === restoredId
+              tab.selectedId === initialId
                 ? { ...tab, source }
                 : tab,
             ),
