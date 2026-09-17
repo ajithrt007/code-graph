@@ -43,8 +43,24 @@ internal static class MethodRenderer
         };
     }
 
-    public static string MakeId(IMethodSymbol symbol) =>
-        $"csharp:{symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)}";
+    public static string MakeId(IMethodSymbol symbol)
+    {
+        var baseId = $"csharp:{symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)}";
+        // Local functions render without their enclosing method
+        // (`Local()`), so two locals with the same name/signature in
+        // different methods would collide. Qualify with the enclosing
+        // method chain to keep IDs stable and unique.
+        if (symbol.MethodKind == MethodKind.LocalFunction)
+        {
+            var chain = new List<string>();
+            for (var container = symbol.ContainingSymbol; container is IMethodSymbol parent; container = parent.ContainingSymbol)
+                chain.Add(parent.Name);
+            chain.Reverse();
+            if (chain.Count > 0)
+                baseId += $"|in:{string.Join(".", chain)}";
+        }
+        return baseId;
+    }
 
     private static string BuildDisplayName(IMethodSymbol symbol)
     {

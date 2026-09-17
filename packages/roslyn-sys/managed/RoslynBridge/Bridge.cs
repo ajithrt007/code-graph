@@ -41,7 +41,7 @@ public static class Bridge
             var request = JsonSerializer.Deserialize<AnalyzeRequest>(requestJson)
                 ?? throw new InvalidOperationException("could not parse request");
             using var workspace = new AdhocWorkspace();
-            var project = ProjectLoader.LoadProject(workspace, request.Path);
+            var project = ProjectLoader.LoadProjectWithReferences(workspace, request.Path, request.References);
             if (project is null)
             {
                 return new AnalysisResult { Error = $"could not load project at {request.Path}" };

@@ -95,8 +95,23 @@ impl Bridge {
     /// Analyze the project/solution at `path` and return the JSON graph
     /// document emitted by the managed helper.
     pub fn analyze_to_json(&self, path: &Path) -> Result<String> {
+        self.analyze_to_json_with_references(path, &[])
+    }
+
+    /// Analyze `path`, letting the helper resolve cross-project calls
+    /// against `references` (sibling `.csproj` paths, e.g. every project in
+    /// the solution). The helper wires only the ones actually named by
+    /// `<ProjectReference>`; the rest are ignored.
+    pub fn analyze_to_json_with_references(
+        &self,
+        path: &Path,
+        references: &[PathBuf],
+    ) -> Result<String> {
         let mut command = Command::new(&self.helper);
         command.arg(path.as_os_str());
+        for r in references {
+            command.arg("--reference").arg(r.as_os_str());
+        }
         // On Windows, console-subsystem children pop a visible console
         // window per spawn; suppress it — stdout/stderr stay piped.
         #[cfg(windows)]

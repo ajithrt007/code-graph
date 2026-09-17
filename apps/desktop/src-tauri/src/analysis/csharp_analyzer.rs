@@ -129,6 +129,7 @@ impl CSharpAnalyzer {
         );
 
         let mut merged = MethodGraph::new();
+        let all_paths: Vec<PathBuf> = projects.iter().map(|p| p.project_path.clone()).collect();
         for (index, project) in projects.iter().enumerate() {
             let name = project
                 .project_path
@@ -147,7 +148,14 @@ impl CSharpAnalyzer {
                 total,
             );
             let json = bridge
-                .analyze_to_json(&project.project_path)
+                .analyze_to_json_with_references(
+                    &project.project_path,
+                    &all_paths
+                        .iter()
+                        .filter(|p| *p != &project.project_path)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
                 .with_context(|| {
                     format!(
                         "Roslyn bridge failed for project {}",
